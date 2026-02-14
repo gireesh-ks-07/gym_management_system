@@ -1,11 +1,39 @@
 const { Sequelize, DataTypes } = require('sequelize');
 const path = require('path');
+require('dotenv').config(); // Load .env file
 
-const sequelize = new Sequelize({
-    dialect: 'sqlite',
-    storage: path.join(__dirname, '../database.sqlite'),
-    logging: false
-});
+let sequelize;
+
+if (process.env.DATABASE_URL) {
+    sequelize = new Sequelize(process.env.DATABASE_URL, {
+        dialect: 'postgres',
+        logging: false,
+        dialectOptions: {
+            ssl: {
+                require: true,
+                rejectUnauthorized: false
+            }
+        }
+    });
+} else {
+    // Default to local PostgreSQL if no URL provided
+    sequelize = new Sequelize(
+        process.env.DB_NAME || 'gym_db',
+        process.env.DB_USER || 'postgres',
+        process.env.DB_PASSWORD || 'postgres',
+        {
+            host: process.env.DB_HOST || 'localhost',
+            port: process.env.DB_PORT || 5432,
+            dialect: 'postgres',
+            logging: false
+        }
+    );
+}
+
+// Log connection status
+sequelize.authenticate()
+    .then(() => console.log('Database connected...'))
+    .catch(err => console.log('Error: ' + err));
 
 const User = sequelize.define('User', {
     name: { type: DataTypes.STRING, allowNull: false },
