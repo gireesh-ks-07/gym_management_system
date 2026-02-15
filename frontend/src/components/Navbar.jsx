@@ -3,7 +3,7 @@ import { Search, Bell, Plus, User, Dumbbell, UserCog, Tag, CreditCard } from 'lu
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 
-const Navbar = () => {
+const Navbar = ({ toggleSidebar }) => {
     const { user } = useAuth();
     const navigate = useNavigate();
     const [showQuickAdd, setShowQuickAdd] = useState(false);
@@ -26,6 +26,18 @@ const Navbar = () => {
 
     return (
         <div className="top-navbar">
+            <button
+                className="btn btn-ghost sidebar-toggle-btn"
+                onClick={toggleSidebar}
+                style={{ marginRight: '1rem' }}
+            >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', width: '24px' }}>
+                    <span style={{ height: '2px', width: '100%', background: 'var(--text-main)', borderRadius: '2px' }}></span>
+                    <span style={{ height: '2px', width: '100%', background: 'var(--text-main)', borderRadius: '2px' }}></span>
+                    <span style={{ height: '2px', width: '100%', background: 'var(--text-main)', borderRadius: '2px' }}></span>
+                </div>
+            </button>
+
             <div className="search-bar">
                 <Search size={18} color="var(--text-secondary)" />
                 <input

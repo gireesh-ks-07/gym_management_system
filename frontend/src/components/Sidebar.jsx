@@ -3,14 +3,12 @@ import { NavLink } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { LayoutDashboard, Users, Dumbbell, LogOut, Settings, Tag, CreditCard, BarChart2 } from 'lucide-react';
 
-const Sidebar = () => {
+const Sidebar = ({ isOpen, onClose }) => {
     const { user, logout } = useAuth();
-
-    // Default to empty object if user is null to avoid crash
     const role = user?.role;
 
     return (
-        <div className="sidebar">
+        <div className={`sidebar ${isOpen ? 'open' : ''}`}>
             <div className="sidebar-brand">
                 <div style={{
                     background: 'linear-gradient(135deg, var(--primary), var(--accent-blue))',
@@ -24,51 +22,67 @@ const Sidebar = () => {
                     <Dumbbell size={24} color="white" />
                 </div>
                 <span style={{ fontFamily: 'var(--font-display)', letterSpacing: '-0.02em' }}>FitManager</span>
+
+                {/* Close button for mobile */}
+                <button
+                    onClick={onClose}
+                    style={{ marginLeft: 'auto', background: 'transparent', color: 'var(--text-secondary)' }}
+                    className="md:hidden"
+                >
+                    <span style={{ fontSize: '1.5rem', lineHeight: 1 }}>&times;</span>
+                </button>
             </div>
 
             <nav style={{ flex: 1, overflowY: 'auto', paddingRight: '0.5rem' }}>
-                <NavLink to="/" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+                <NavLink to="/" onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
                     <LayoutDashboard size={20} />
                     <span>Dashboard</span>
                 </NavLink>
 
                 {role === 'superadmin' && (
-                    <NavLink to="/gyms" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+                    <NavLink to="/gyms" onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
                         <Dumbbell size={20} />
                         <span>Gyms</span>
                     </NavLink>
                 )}
 
+                {role === 'superadmin' && (
+                    <NavLink to="/subscription-plans" onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+                        <Tag size={20} />
+                        <span>SaaS Plans</span>
+                    </NavLink>
+                )}
+
                 {['admin', 'trainer'].includes(role) && (
-                    <NavLink to="/clients" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+                    <NavLink to="/clients" onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
                         <Users size={20} />
                         <span>Members</span>
                     </NavLink>
                 )}
 
                 {role === 'admin' && (
-                    <NavLink to="/plans" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+                    <NavLink to="/plans" onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
                         <Tag size={20} />
                         <span>Plans</span>
                     </NavLink>
                 )}
 
                 {role === 'admin' && (
-                    <NavLink to="/staff" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+                    <NavLink to="/staff" onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
                         <Settings size={20} />
                         <span>Staff</span>
                     </NavLink>
                 )}
 
                 {['admin', 'trainer'].includes(role) && (
-                    <NavLink to="/payments" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+                    <NavLink to="/payments" onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
                         <CreditCard size={20} />
                         <span>Payments</span>
                     </NavLink>
                 )}
 
                 {['admin', 'superadmin'].includes(role) && (
-                    <NavLink to="/reports" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+                    <NavLink to="/reports" onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
                         <BarChart2 size={20} />
                         <span>Reports</span>
                     </NavLink>

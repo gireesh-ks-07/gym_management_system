@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import api from '../api';
-import { Plus, UserCog, Mail, Calendar, Shield } from 'lucide-react';
+import { Plus, UserCog, Mail, Calendar, Shield, Phone } from 'lucide-react';
 import ActionMenu from '../components/ActionMenu';
 import Modal from '../components/Modal';
+import ConfirmationModal from '../components/ConfirmationModal';
 import { useToast } from '../context/ToastContext';
 import { useLocation, useNavigate } from 'react-router-dom';
 
@@ -11,8 +12,15 @@ const Staff = () => {
     const [showModal, setShowModal] = useState(false);
     const [isEditMode, setIsEditMode] = useState(false);
     const [currentStaffId, setCurrentStaffId] = useState(null);
-    const [formData, setFormData] = useState({ name: '', email: '', password: '', role: 'trainer' });
+    const [formData, setFormData] = useState({ name: '', email: '', password: '', role: 'trainer', phone: '' });
     const { addToast } = useToast();
+    const [confirmModal, setConfirmModal] = useState({
+        isOpen: false,
+        title: '',
+        message: '',
+        onConfirm: () => { },
+        isDangerous: false
+    });
 
     const location = useLocation();
     const navigate = useNavigate();
@@ -34,7 +42,7 @@ const Staff = () => {
         const queryParams = new URLSearchParams(location.search);
         if (queryParams.get('action') === 'add') {
             setIsEditMode(false);
-            setFormData({ name: '', email: '', password: '', role: 'trainer' });
+            setFormData({ name: '', email: '', password: '', role: 'trainer', phone: '' });
             setShowModal(true);
             navigate(location.pathname, { replace: true });
         }
@@ -42,47 +50,71 @@ const Staff = () => {
 
     const handleAddClick = () => {
         setIsEditMode(false);
-        setFormData({ name: '', email: '', password: '', role: 'trainer' });
+        setFormData({ name: '', email: '', password: '', role: 'trainer', phone: '' });
         setShowModal(true);
     };
 
     const handleEditClick = (s) => {
         setIsEditMode(true);
         setCurrentStaffId(s.id);
-        setFormData({ name: s.name, email: s.email, password: '', role: 'trainer' });
+        setFormData({ name: s.name, email: s.email, password: '', role: 'trainer', phone: s.phone || '' });
         setShowModal(true);
     };
 
-    const handleDeleteClick = async (staffId) => {
-        if (window.confirm('Are you sure you want to delete this staff member?')) {
-            try {
-                await api.delete(`/staff/${staffId}`);
-                addToast('Staff member deleted successfully', 'success');
-                fetchStaff();
-            } catch (err) {
-                addToast('Failed to delete staff member', 'error');
-            }
+    const deleteStaff = async (staffId) => {
+        try {
+            await api.delete(`/staff/${staffId}`);
+            addToast('Staff member deleted successfully', 'success');
+            fetchStaff();
+        } catch (err) {
+            addToast('Failed to delete staff member', 'error');
         }
+    };
+
+    const handleDeleteClick = (staffId) => {
+        setConfirmModal({
+            isOpen: true,
+            title: 'Delete Staff Member',
+            message: 'Are you sure you want to delete this staff member? This action cannot be undone.',
+            onConfirm: () => deleteStaff(staffId),
+            isDangerous: true,
+            confirmText: 'Delete'
+        });
     };
 
     const handleSubmit = async (e) => {
         e.preventDefault();
 
+        if (!formData.name.trim()) {
+            addToast('Please enter a valid name', 'error');
+            return;
+        }
+
+        if (!formData.email.match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)) {
+            addToast('Please enter a valid e-mail address', 'error');
+            return;
+        }
+
+        if (formData.phone && formData.phone.length !== 10) {
+            addToast('Phone number must be 10 digits', 'error');
+            return;
+        }
+
         if (!isEditMode && formData.password.length < 6) {
-            alert('Password must be at least 6 characters long');
+            addToast('Password must be at least 6 characters long', 'error');
             return;
         }
 
         try {
             if (isEditMode) {
-                await api.put(`/staff/${currentStaffId}`, { name: formData.name, email: formData.email });
+                await api.put(`/staff/${currentStaffId}`, { name: formData.name, email: formData.email, phone: formData.phone });
                 addToast('Staff updated successfully', 'success');
             } else {
                 await api.post('/staff', formData);
                 addToast('Staff added successfully', 'success');
             }
             setShowModal(false);
-            setFormData({ name: '', email: '', password: '', role: 'trainer' });
+            setFormData({ name: '', email: '', password: '', role: 'trainer', phone: '' });
             fetchStaff();
         } catch (err) {
             addToast(isEditMode ? 'Failed to update staff' : 'Failed to add staff', 'error');
@@ -139,6 +171,12 @@ const Staff = () => {
                                             <Mail size={14} />
                                             {s.email}
                                         </div>
+                                        {s.phone && (
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '0.25rem' }}>
+                                                <Phone size={14} />
+                                                {s.phone}
+                                            </div>
+                                        )}
                                     </td>
                                     <td>
                                         <span className="status-badge" style={{
@@ -195,6 +233,20 @@ const Staff = () => {
                         <label className="input-label">Email Address</label>
                         <input className="input-field" type="email" required value={formData.email} onChange={e => setFormData({ ...formData, email: e.target.value })} placeholder="sarah@example.com" />
                     </div>
+                    <div className="input-group">
+                        <label className="input-label">Phone Number (Optional)</label>
+                        <input
+                            className="input-field"
+                            type="text"
+                            inputMode="numeric"
+                            value={formData.phone}
+                            onChange={e => {
+                                const val = e.target.value.replace(/\D/g, '').slice(0, 10);
+                                setFormData({ ...formData, phone: val });
+                            }}
+                            placeholder="9876543210"
+                        />
+                    </div>
                     {!isEditMode && (
                         <div className="input-group">
                             <label className="input-label">Temporary Password</label>
@@ -208,7 +260,17 @@ const Staff = () => {
                     </div>
                 </form>
             </Modal>
-        </div>
+
+            <ConfirmationModal
+                isOpen={confirmModal.isOpen}
+                onClose={() => setConfirmModal({ ...confirmModal, isOpen: false })}
+                title={confirmModal.title}
+                message={confirmModal.message}
+                onConfirm={confirmModal.onConfirm}
+                isDangerous={confirmModal.isDangerous}
+                confirmText={confirmModal.confirmText}
+            />
+        </div >
     );
 };
 

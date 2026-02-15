@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
 import { useNavigate } from 'react-router-dom';
 import { Dumbbell, ArrowRight, Lock, Mail } from 'lucide-react';
 
@@ -11,6 +12,8 @@ const Login = () => {
     const navigate = useNavigate();
     const [loading, setLoading] = useState(false);
 
+    const { addToast } = useToast();
+
     useEffect(() => {
         if (user) {
             if (user.role === 'superadmin') navigate('/gyms');
@@ -21,15 +24,22 @@ const Login = () => {
     const handleSubmit = async (e) => {
         e.preventDefault();
         setError('');
+        if (!email.match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)) {
+            addToast('Please enter a valid email address', 'error');
+            return;
+        }
         if (password.length < 6) {
-            setError('Password must be at least 6 characters long');
+            addToast('Password must be at least 6 characters long', 'error');
             return;
         }
         setLoading(true);
         const result = await login(email, password);
         setLoading(false);
         if (!result.success) {
+            addToast(result.message, 'error');
             setError(result.message);
+        } else {
+            addToast('Logged in successfully', 'success');
         }
     };
 

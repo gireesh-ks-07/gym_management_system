@@ -7,16 +7,33 @@ import {
     AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
     PieChart, Pie, Cell, Legend
 } from 'recharts';
+import { useAuth } from '../context/AuthContext';
+import SuperAdminDashboard from './SuperAdminDashboard';
 
 const Dashboard = () => {
+    const { user } = useAuth();
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [subscription, setSubscription] = useState(null);
+
+    if (user?.role === 'superadmin') {
+        return <SuperAdminDashboard />;
+    }
 
     useEffect(() => {
         const fetchData = async () => {
             try {
-                const res = await api.get('/dashboard');
-                setData(res.data);
+                // Fetch sub status first or in parallel, but handle independently
+                const subRes = await api.get('/gym/subscription').catch(() => null);
+                setSubscription(subRes?.data || null);
+
+                if (subRes?.data?.subscriptionStatus !== 'active' && user?.role !== 'superadmin') {
+                    // If suspended/expired, don't bother fetching dashboard data or just let it fail silently
+                    // We will block UI anyway
+                }
+
+                const dashboardRes = await api.get('/dashboard');
+                setData(dashboardRes.data);
             } catch (err) {
                 console.error(err);
             } finally {
@@ -32,6 +49,43 @@ const Dashboard = () => {
             <div className="loading-text">LOADING METRICS...</div>
         </div>
     );
+
+    // Blocking View for Expired/Suspended Subscription
+    if (subscription && subscription.subscriptionStatus !== 'active' && user?.role !== 'superadmin') {
+        const isExpired = subscription.subscriptionStatus === 'expired';
+        return (
+            <div className="animate-fade-in" style={{
+                height: '80vh',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                textAlign: 'center',
+                gap: '1.5rem'
+            }}>
+                <div style={{ padding: '2rem', background: 'rgba(239, 68, 68, 0.1)', borderRadius: '50%', color: 'var(--danger)' }}>
+                    <AlertCircle size={48} />
+                </div>
+                <h1 style={{ fontSize: '2rem', fontWeight: 'bold' }}>
+                    {isExpired ? 'Subscription Expired' : 'Account Suspended'}
+                </h1>
+                <p style={{ maxWidth: '500px', color: 'var(--text-secondary)', lineHeight: '1.6' }}>
+                    {isExpired
+                        ? 'Your gym\'s subscription plan has expired. To continue using the platform and accessing your data, please renew your subscription.'
+                        : 'Your account has been suspended by the platform administrator. Please contact support for assistance.'}
+                </p>
+                <div style={{ marginTop: '1rem', padding: '1rem', background: 'var(--bg-card)', borderRadius: '12px', border: '1px solid var(--border-color)', minWidth: '300px' }}>
+                    <div style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>Current Status</div>
+                    <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'var(--danger)', textTransform: 'uppercase' }}>
+                        {subscription.subscriptionStatus}
+                    </div>
+                </div>
+                <button className="btn btn-primary" style={{ marginTop: '1rem' }} onClick={() => window.location.reload()}>
+                    Check Status Again
+                </button>
+            </div>
+        );
+    }
 
     if (!data) return <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>Failed to load dashboard data.</div>;
 
@@ -84,21 +138,36 @@ const Dashboard = () => {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '2.5rem' }}>
                 <div>
                     <h1 style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>Dashboard</h1>
-                    <p style={{ color: 'var(--text-muted)' }}>Real-time overview of gym performance.</p>
+                    <p style={{ color: 'var(--text-muted)' }}>Real-time overview of your gym.</p>
                 </div>
 
-                <div style={{ display: 'flex', gap: '1rem' }}>
-                    <div className="biometric-status">
-                        <Wifi size={14} />
-                        <span>Biometric Device</span>
-                        <div className="status-dot"></div>
-                    </div>
-                    <div className="card" style={{ padding: '0.5rem 1rem', display: 'flex', alignItems: 'center', gap: '0.75rem', borderRadius: '99px' }}>
-                        <Calendar size={16} color="var(--primary)" />
-                        <span style={{ fontSize: '0.9rem', fontWeight: '500' }}>
-                            {new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
-                        </span>
-                    </div>
+                <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+                    {subscription && (
+                        <div className={`card ${subscription.subscriptionStatus === 'active' ? 'status-active' : 'status-expired'}`}
+                            style={{
+                                padding: '0.5rem 1rem',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.75rem',
+                                borderRadius: '12px',
+                                background: subscription.subscriptionStatus === 'active' ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                                border: `1px solid ${subscription.subscriptionStatus === 'active' ? 'var(--success)' : 'var(--danger)'}`,
+                                color: subscription.subscriptionStatus === 'active' ? 'var(--success)' : 'var(--danger)'
+                            }}>
+                            <Activity size={16} />
+                            <div>
+                                <div style={{ fontSize: '0.75rem', fontWeight: '600', textTransform: 'uppercase' }}>Subscription</div>
+                                <div style={{ fontSize: '0.9rem', fontWeight: 'bold' }}>
+                                    {subscription.subscriptionStatus === 'active' ? 'Active' : 'Expired'}
+                                    {subscription.subscriptionExpiresAt && (
+                                        <span style={{ fontWeight: 'normal', opacity: 0.8, marginLeft: '5px' }}>
+                                            (Exp: {new Date(subscription.subscriptionExpiresAt).toLocaleDateString()})
+                                        </span>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
             </div>
 
@@ -133,10 +202,10 @@ const Dashboard = () => {
             </div>
 
             {/* Main Content Grid */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(12, 1fr)', gap: '2rem', marginBottom: '2.5rem' }}>
+            <div className="dashboard-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(12, 1fr)', gap: '2rem', marginBottom: '2.5rem' }}>
 
                 {/* Revenue Chart (Spans 8 columns) */}
-                <div className="card" style={{ gridColumn: 'span 8', padding: '1.5rem', minHeight: '400px' }}>
+                <div className="card dashboard-chart-card" style={{ gridColumn: 'span 8', padding: '1.5rem', minHeight: '400px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
                         <div>
                             <h3 style={{ fontSize: '1.1rem', marginBottom: '0.25rem' }}>Revenue Overview</h3>
@@ -193,7 +262,7 @@ const Dashboard = () => {
                 </div>
 
                 {/* Plan Distribution (Spans 4 columns) */}
-                <div className="card" style={{ gridColumn: 'span 4', padding: '1.5rem', minHeight: '400px' }}>
+                <div className="card dashboard-pie-card" style={{ gridColumn: 'span 4', padding: '1.5rem', minHeight: '400px' }}>
                     <h3 style={{ fontSize: '1.1rem', marginBottom: '1.5rem' }}>Membership Plans</h3>
                     <div style={{ height: '300px', position: 'relative' }}>
                         <ResponsiveContainer width="100%" height="100%">

@@ -46,9 +46,24 @@ const User = sequelize.define('User', {
     phone: { type: DataTypes.STRING, allowNull: true },
 });
 
+// SaaS Subscription Plan (For Gyms)
+const SubscriptionPlan = sequelize.define('SubscriptionPlan', {
+    name: { type: DataTypes.STRING, allowNull: false, unique: true }, // Basic, Pro, Enterprise
+    price: { type: DataTypes.FLOAT, allowNull: false },
+    duration: { type: DataTypes.INTEGER, allowNull: false }, // in months
+    maxMembers: { type: DataTypes.INTEGER, allowNull: true }, // Optional limit
+    maxTrainers: { type: DataTypes.INTEGER, allowNull: true }, // Optional limit
+    description: { type: DataTypes.TEXT, allowNull: true }
+});
+
 const Gym = sequelize.define('Gym', {
     name: { type: DataTypes.STRING, allowNull: false },
     address: { type: DataTypes.STRING, allowNull: true },
+    subscriptionStatus: {
+        type: DataTypes.ENUM('active', 'expired', 'suspended'),
+        defaultValue: 'active'
+    },
+    subscriptionExpiresAt: { type: DataTypes.DATE, allowNull: true }
 });
 
 const Client = sequelize.define('Client', {
@@ -58,7 +73,20 @@ const Client = sequelize.define('Client', {
     height: { type: DataTypes.FLOAT, allowNull: true }, // in cm
     weight: { type: DataTypes.FLOAT, allowNull: true }, // in kg
     joiningDate: { type: DataTypes.DATEONLY, defaultValue: DataTypes.NOW },
-    gender: { type: DataTypes.ENUM('male', 'female', 'other'), allowNull: false, defaultValue: 'male' }
+    gender: { type: DataTypes.ENUM('male', 'female', 'other'), allowNull: false, defaultValue: 'male' },
+    aadhaar_number: { type: DataTypes.STRING, allowNull: true },
+    address: { type: DataTypes.TEXT, allowNull: true },
+    status: {
+        type: DataTypes.ENUM('active', 'inactive', 'payment_due'),
+        defaultValue: 'inactive'
+    },
+    planExpiresAt: { type: DataTypes.DATE, allowNull: true }
+});
+
+const Attendance = sequelize.define('Attendance', {
+    date: { type: DataTypes.DATEONLY, defaultValue: DataTypes.NOW },
+    status: { type: DataTypes.ENUM('present', 'absent', 'excused'), defaultValue: 'present' },
+    checkInTime: { type: DataTypes.TIME, defaultValue: DataTypes.NOW }
 });
 
 const Payment = sequelize.define('Payment', {
@@ -75,6 +103,9 @@ const Plan = sequelize.define('Plan', {
 });
 
 // Relationships
+Gym.belongsTo(SubscriptionPlan, { foreignKey: 'subscriptionPlanId' });
+SubscriptionPlan.hasMany(Gym, { foreignKey: 'subscriptionPlanId' });
+
 Gym.hasMany(User, { foreignKey: 'gymId' });
 User.belongsTo(Gym, { foreignKey: 'gymId' });
 
@@ -96,4 +127,10 @@ Plan.belongsTo(Gym, { foreignKey: 'gymId' });
 Plan.hasMany(Client, { foreignKey: 'planId' });
 Client.belongsTo(Plan, { foreignKey: 'planId' });
 
-module.exports = { sequelize, User, Gym, Client, Payment, Plan };
+Client.hasMany(Attendance, { foreignKey: 'clientId' });
+Attendance.belongsTo(Client, { foreignKey: 'clientId' });
+
+Gym.hasMany(Attendance, { foreignKey: 'gymId' });
+Attendance.belongsTo(Gym, { foreignKey: 'gymId' });
+
+module.exports = { sequelize, User, Gym, Client, Payment, Plan, SubscriptionPlan, Attendance };

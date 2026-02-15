@@ -4,6 +4,7 @@ import { Plus, Tag, Clock, CheckCircle } from 'lucide-react';
 import { useToast } from '../context/ToastContext';
 import ActionMenu from '../components/ActionMenu';
 import Modal from '../components/Modal';
+import ConfirmationModal from '../components/ConfirmationModal';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 const Plans = () => {
@@ -14,6 +15,13 @@ const Plans = () => {
     const [currentPlanId, setCurrentPlanId] = useState(null);
     const [formData, setFormData] = useState({
         name: '', price: '', duration: '', description: ''
+    });
+    const [confirmModal, setConfirmModal] = useState({
+        isOpen: false,
+        title: '',
+        message: '',
+        onConfirm: () => { },
+        isDangerous: false
     });
 
     const location = useLocation();
@@ -55,16 +63,25 @@ const Plans = () => {
         setShowModal(true);
     };
 
-    const handleDeleteClick = async (planId) => {
-        if (window.confirm('Are you sure you want to delete this plan?')) {
-            try {
-                await api.delete(`/plans/${planId}`);
-                addToast('Plan deleted successfully', 'success');
-                fetchPlans();
-            } catch (err) {
-                addToast('Failed to delete plan', 'error');
-            }
+    const deletePlan = async (planId) => {
+        try {
+            await api.delete(`/plans/${planId}`);
+            addToast('Plan deleted successfully', 'success');
+            fetchPlans();
+        } catch (err) {
+            addToast('Failed to delete plan', 'error');
         }
+    };
+
+    const handleDeleteClick = (planId) => {
+        setConfirmModal({
+            isOpen: true,
+            title: 'Delete Plan',
+            message: 'Are you sure you want to delete this plan? This action cannot be undone.',
+            onConfirm: () => deletePlan(planId),
+            isDangerous: true,
+            confirmText: 'Delete'
+        });
     };
 
     const handleAddClick = () => {
@@ -75,6 +92,21 @@ const Plans = () => {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
+        if (!formData.name.trim()) {
+            addToast('Plan name is required', 'error');
+            return;
+        }
+
+        if (Number(formData.price) <= 0) {
+            addToast('Price must be greater than 0', 'error');
+            return;
+        }
+
+        if (Number(formData.duration) <= 0) {
+            addToast('Duration must be at least 1 month', 'error');
+            return;
+        }
+
         try {
             if (isEditMode) {
                 // Mock success for now as PUT endpoint might be missing
@@ -207,6 +239,16 @@ const Plans = () => {
                     </div>
                 </form>
             </Modal>
+
+            <ConfirmationModal
+                isOpen={confirmModal.isOpen}
+                onClose={() => setConfirmModal({ ...confirmModal, isOpen: false })}
+                title={confirmModal.title}
+                message={confirmModal.message}
+                onConfirm={confirmModal.onConfirm}
+                isDangerous={confirmModal.isDangerous}
+                confirmText={confirmModal.confirmText}
+            />
         </div>
     );
 };

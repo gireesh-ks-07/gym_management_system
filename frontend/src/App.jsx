@@ -12,6 +12,7 @@ import { ToastProvider } from './context/ToastContext';
 import Dashboard from './pages/Dashboard';
 import Reports from './pages/Reports';
 import Plans from './pages/Plans';
+import SubscriptionPlans from './pages/SubscriptionPlans';
 
 const Loader = () => (
   <div className="loader-container">
@@ -22,6 +23,7 @@ const Loader = () => (
 
 const ProtectedRoute = ({ children, roles }) => {
   const { user, loading } = useAuth();
+  const [isSidebarOpen, setIsSidebarOpen] = React.useState(false);
 
   if (loading) return <Loader />;
   if (!user) return <Navigate to="/login" />;
@@ -29,9 +31,16 @@ const ProtectedRoute = ({ children, roles }) => {
 
   return (
     <div className="dashboard-layout">
-      <Sidebar />
+      {/* Sidebar Overlay for Mobile */}
+      <div
+        className={`sidebar-overlay ${isSidebarOpen ? 'open' : ''}`}
+        onClick={() => setIsSidebarOpen(false)}
+      ></div>
+
+      <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} />
+
       <div className="main-content">
-        <Navbar />
+        <Navbar toggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)} />
         <div style={{ padding: '0 0.5rem' }}>
           {children}
         </div>
@@ -64,6 +73,12 @@ const App = () => {
             <Route path="/gyms" element={
               <ProtectedRoute roles={['superadmin']}>
                 <Gyms />
+              </ProtectedRoute>
+            } />
+
+            <Route path="/subscription-plans" element={
+              <ProtectedRoute roles={['superadmin']}>
+                <SubscriptionPlans />
               </ProtectedRoute>
             } />
 
