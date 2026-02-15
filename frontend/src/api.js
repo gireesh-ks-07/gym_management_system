@@ -2,7 +2,7 @@ import axios from 'axios';
 
 // Automatically switch between dev (localhost) and prod (IP) based on environment
 const baseURL = import.meta.env.MODE === 'production'
-    ? 'http://44.223.67.172/api'
+    ? 'https://gymapis.mobilemonks.in/api'
     : 'http://localhost:3000/api';
 
 const api = axios.create({
