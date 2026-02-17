@@ -1,1 +1,9 @@
-{"development": {"username": "gymuser", "password": "yourpassword", "database": "gymdb", "host": "127.0.0.1", "dialect": "postgres"}}
+{
+    "development": {
+        "username": "facilityuser",
+        "password": "yourpassword",
+        "database": "facilitydb",
+        "host": "127.0.0.1",
+        "dialect": "postgres"
+    }
+}

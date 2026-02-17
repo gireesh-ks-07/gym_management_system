@@ -18,7 +18,7 @@ if (process.env.DATABASE_URL) {
 } else {
     // Default to local PostgreSQL if no URL provided
     sequelize = new Sequelize(
-        process.env.DB_NAME || 'gym_db',
+        process.env.DB_NAME || 'facility_db',
         process.env.DB_USER || 'postgres',
         process.env.DB_PASSWORD || 'postgres',
         {
