@@ -1,8 +1,8 @@
 {
     "development": {
         "username": "facilityuser",
-        "password": "yourpassword",
-        "database": "facilitydb",
+        "password": "GFDVDBSjh@18456",
+        "database": "facility_db",
         "host": "127.0.0.1",
         "dialect": "postgres"
     }

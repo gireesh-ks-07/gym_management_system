@@ -1,9 +1,12 @@
 import axios from 'axios';
 
-// Automatically switch between dev (localhost) and prod (IP) based on environment
-const baseURL = import.meta.env.MODE === 'production'
-    ? 'https://facilityapis.mobilemonks.in'
-    : 'http://localhost:3000';
+const envBaseUrl = import.meta.env.VITE_API_BASE_URL;
+// Default: remote in production, localhost in development.
+const baseURL = envBaseUrl || (
+    import.meta.env.MODE === 'production'
+        ? 'https://facilityapis.mobilemonks.in'
+        : 'http://localhost:3000'
+);
 
 const api = axios.create({
     baseURL,
