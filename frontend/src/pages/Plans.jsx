@@ -1,27 +1,20 @@
 import React, { useEffect, useState } from 'react';
 import api from '../api';
-import { Plus, Tag, Clock, CheckCircle } from 'lucide-react';
+import { Plus, Tag, CheckCircle } from 'lucide-react';
 import { useToast } from '../context/ToastContext';
 import ActionMenu from '../components/ActionMenu';
 import Modal from '../components/Modal';
-import ConfirmationModal from '../components/ConfirmationModal';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { toTitleCase } from '../utils/textCase';
 
 const Plans = () => {
     const [plans, setPlans] = useState([]);
-    const { addToast } = useToast();
+    const { addToast, showConfirm } = useToast();
     const [showModal, setShowModal] = useState(false);
     const [isEditMode, setIsEditMode] = useState(false);
     const [currentPlanId, setCurrentPlanId] = useState(null);
     const [formData, setFormData] = useState({
-        name: '', price: '', duration: '', description: ''
-    });
-    const [confirmModal, setConfirmModal] = useState({
-        isOpen: false,
-        title: '',
-        message: '',
-        onConfirm: () => { },
-        isDangerous: false
+        name: '', price: '', duration: '', description: '', features: ''
     });
 
     const location = useLocation();
@@ -45,7 +38,7 @@ const Plans = () => {
         const queryParams = new URLSearchParams(location.search);
         if (queryParams.get('action') === 'add') {
             setIsEditMode(false);
-            setFormData({ name: '', price: '', duration: '', description: '' });
+            setFormData({ name: '', price: '', duration: '', description: '', features: '' });
             setShowModal(true);
             navigate(location.pathname, { replace: true });
         }
@@ -58,7 +51,8 @@ const Plans = () => {
             name: plan.name,
             price: plan.price,
             duration: plan.duration,
-            description: plan.description || ''
+            description: plan.description || '',
+            features: plan.features ? (Array.isArray(plan.features) ? plan.features.join('\n') : plan.features) : ''
         });
         setShowModal(true);
     };
@@ -74,19 +68,16 @@ const Plans = () => {
     };
 
     const handleDeleteClick = (planId) => {
-        setConfirmModal({
-            isOpen: true,
-            title: 'Delete Plan',
-            message: 'Are you sure you want to delete this plan? This action cannot be undone.',
-            onConfirm: () => deletePlan(planId),
-            isDangerous: true,
-            confirmText: 'Delete'
-        });
+        showConfirm(
+            'Are you sure you want to delete this plan? This action cannot be undone.',
+            () => deletePlan(planId),
+            'Delete Plan'
+        );
     };
 
     const handleAddClick = () => {
         setIsEditMode(false);
-        setFormData({ name: '', price: '', duration: '', description: '' });
+        setFormData({ name: '', price: '', duration: '', description: '', features: '' });
         setShowModal(true);
     };
 
@@ -108,14 +99,19 @@ const Plans = () => {
         }
 
         try {
+            const payload = {
+                ...formData,
+                features: formData.features.split('\n').filter(f => f.trim() !== '')
+            };
+
             if (isEditMode) {
-                // Mock success for now as PUT endpoint might be missing
-                addToast('Plan updated (Mock)', 'success');
+                await api.put(`/plans/${currentPlanId}`, payload);
+                addToast('Plan updated successfully', 'success');
             } else {
-                await api.post('/plans', formData);
+                await api.post('/plans', payload);
                 addToast('Plan created successfully', 'success');
             }
-            setFormData({ name: '', price: '', duration: '', description: '' });
+            setFormData({ name: '', price: '', duration: '', description: '', features: '' });
             setShowModal(false);
             fetchPlans();
         } catch (err) {
@@ -128,7 +124,7 @@ const Plans = () => {
             <div className="page-header" style={{ marginBottom: '2.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <div>
                     <h1 style={{ fontSize: '1.8rem', fontWeight: 'bold' }}>Membership Plans</h1>
-                    <p style={{ color: 'var(--text-secondary)' }}>Manage your gym's subscription tiers</p>
+                    <p style={{ color: 'var(--text-secondary)' }}>Manage your facility's subscription tiers</p>
                 </div>
                 <button className="btn btn-primary" onClick={handleAddClick}>
                     <Plus size={18} />
@@ -163,8 +159,8 @@ const Plans = () => {
 
                         <div style={{ position: 'absolute', top: '1rem', right: '0.5rem' }}>
                             <ActionMenu
+                                onEdit={() => handleEditClick(plan)}
                                 onDelete={() => handleDeleteClick(plan.id)}
-                                deleteLabel="Delete Plan"
                             />
                         </div>
 
@@ -177,18 +173,20 @@ const Plans = () => {
                         </div>
 
                         <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', marginBottom: '2rem', lineHeight: '1.6', flex: 1 }}>
-                            {plan.description || 'Includes full gym access, locker usage, and steam room access.'}
+                            {plan.description || 'Includes full facility access, locker usage, and steam room access.'}
                         </p>
 
                         <div style={{ marginBottom: '2rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '0.9rem', color: 'var(--text-main)' }}>
-                                <CheckCircle size={16} color="var(--primary)" />
-                                <span>All Equipment Access</span>
-                            </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '0.9rem', color: 'var(--text-main)' }}>
-                                <CheckCircle size={16} color="var(--primary)" />
-                                <span>Free Fitness Assessment</span>
-                            </div>
+                            {plan.features && Array.isArray(plan.features) && plan.features.length > 0 ? (
+                                plan.features.map((feature, idx) => (
+                                    <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '0.9rem', color: 'var(--text-main)' }}>
+                                        <CheckCircle size={16} color="var(--primary)" />
+                                        <span>{feature}</span>
+                                    </div>
+                                ))
+                            ) : (
+                                <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', fontStyle: 'italic' }}>No specific features listed.</div>
+                            )}
                         </div>
                     </div>
                 ))}
@@ -209,7 +207,7 @@ const Plans = () => {
                 <form onSubmit={handleSubmit}>
                     <div className="input-group">
                         <label className="input-label">Plan Name</label>
-                        <input className="input-field" required value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} placeholder="e.g. Gold Membership" />
+                        <input className="input-field" required value={formData.name} onChange={e => setFormData({ ...formData, name: toTitleCase(e.target.value) })} placeholder="e.g. Gold Membership" />
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
                         <div className="input-group">
@@ -232,6 +230,23 @@ const Plans = () => {
                             style={{ resize: 'none' }}
                         />
                     </div>
+                    <div className="input-group">
+                        <label className="input-label">Features (One per line)</label>
+                        <textarea
+                            className="input-field"
+                            rows="4"
+                            value={formData.features}
+                            onChange={e => {
+                                const normalized = e.target.value
+                                    .split('\n')
+                                    .map((line) => toTitleCase(line))
+                                    .join('\n');
+                                setFormData({ ...formData, features: normalized });
+                            }}
+                            placeholder="All Equipment Access&#10;Free One-on-One Session&#10;Locker Access"
+                            style={{ resize: 'vertical' }}
+                        />
+                    </div>
 
                     <div style={{ marginTop: '2rem', display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>
                         <button type="button" className="btn btn-secondary" onClick={() => setShowModal(false)}>Cancel</button>
@@ -239,16 +254,6 @@ const Plans = () => {
                     </div>
                 </form>
             </Modal>
-
-            <ConfirmationModal
-                isOpen={confirmModal.isOpen}
-                onClose={() => setConfirmModal({ ...confirmModal, isOpen: false })}
-                title={confirmModal.title}
-                message={confirmModal.message}
-                onConfirm={confirmModal.onConfirm}
-                isDangerous={confirmModal.isDangerous}
-                confirmText={confirmModal.confirmText}
-            />
         </div>
     );
 };

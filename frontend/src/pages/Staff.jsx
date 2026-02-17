@@ -3,34 +3,35 @@ import api from '../api';
 import { Plus, UserCog, Mail, Calendar, Shield, Phone } from 'lucide-react';
 import ActionMenu from '../components/ActionMenu';
 import Modal from '../components/Modal';
-import ConfirmationModal from '../components/ConfirmationModal';
+import PasswordInput from '../components/PasswordInput';
 import { useToast } from '../context/ToastContext';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { formatDate } from '../utils/date';
+import { toTitleCase } from '../utils/textCase';
 
 const Staff = () => {
     const [staff, setStaff] = useState([]);
+    const [facility, setFacility] = useState(null);
     const [showModal, setShowModal] = useState(false);
     const [isEditMode, setIsEditMode] = useState(false);
     const [currentStaffId, setCurrentStaffId] = useState(null);
-    const [formData, setFormData] = useState({ name: '', email: '', password: '', role: 'trainer', phone: '' });
-    const { addToast } = useToast();
-    const [confirmModal, setConfirmModal] = useState({
-        isOpen: false,
-        title: '',
-        message: '',
-        onConfirm: () => { },
-        isDangerous: false
-    });
+    const [formData, setFormData] = useState({ name: '', email: '', password: '', role: 'staff', phone: '' });
+    const { addToast, showConfirm } = useToast();
 
     const location = useLocation();
     const navigate = useNavigate();
 
     const fetchStaff = async () => {
         try {
-            const res = await api.get('/staff');
-            setStaff(res.data);
+            const [staffRes, facilityRes] = await Promise.all([
+                api.get('/staff'),
+                api.get('/facility/subscription').catch(() => null),
+            ]);
+            setStaff(staffRes.data);
+            setFacility(facilityRes?.data || null);
         } catch (err) {
             console.error(err);
+            addToast('Failed to fetch staff list', 'error');
         }
     };
 
@@ -41,23 +42,27 @@ const Staff = () => {
     useEffect(() => {
         const queryParams = new URLSearchParams(location.search);
         if (queryParams.get('action') === 'add') {
-            setIsEditMode(false);
-            setFormData({ name: '', email: '', password: '', role: 'trainer', phone: '' });
-            setShowModal(true);
+            handleAddClick();
             navigate(location.pathname, { replace: true });
         }
     }, [location, navigate]);
 
     const handleAddClick = () => {
+        const staffLimit = facility?.SubscriptionPlan?.maxStaff ?? facility?.subscriptionPlan?.maxStaff ?? null;
+        if (staffLimit !== null && staff.length >= Number(staffLimit)) {
+            addToast(`Exceeded limit: only ${staffLimit} staff allowed in current SaaS plan.`, 'error');
+            return;
+        }
+
         setIsEditMode(false);
-        setFormData({ name: '', email: '', password: '', role: 'trainer', phone: '' });
+        setFormData({ name: '', email: '', password: '', role: 'staff', phone: '' });
         setShowModal(true);
     };
 
     const handleEditClick = (s) => {
         setIsEditMode(true);
         setCurrentStaffId(s.id);
-        setFormData({ name: s.name, email: s.email, password: '', role: 'trainer', phone: s.phone || '' });
+        setFormData({ name: s.name, email: s.email, password: '', role: 'staff', phone: s.phone || '' });
         setShowModal(true);
     };
 
@@ -72,14 +77,11 @@ const Staff = () => {
     };
 
     const handleDeleteClick = (staffId) => {
-        setConfirmModal({
-            isOpen: true,
-            title: 'Delete Staff Member',
-            message: 'Are you sure you want to delete this staff member? This action cannot be undone.',
-            onConfirm: () => deleteStaff(staffId),
-            isDangerous: true,
-            confirmText: 'Delete'
-        });
+        showConfirm(
+            'Are you sure you want to delete this staff member? This action cannot be undone.',
+            () => deleteStaff(staffId),
+            'Delete Staff Member'
+        );
     };
 
     const handleSubmit = async (e) => {
@@ -114,10 +116,11 @@ const Staff = () => {
                 addToast('Staff added successfully', 'success');
             }
             setShowModal(false);
-            setFormData({ name: '', email: '', password: '', role: 'trainer', phone: '' });
+            setFormData({ name: '', email: '', password: '', role: 'staff', phone: '' });
             fetchStaff();
         } catch (err) {
-            addToast(isEditMode ? 'Failed to update staff' : 'Failed to add staff', 'error');
+            const message = err?.response?.data?.message;
+            addToast(message || (isEditMode ? 'Failed to update staff' : 'Failed to add staff'), 'error');
         }
     };
 
@@ -126,7 +129,7 @@ const Staff = () => {
             <div className="page-header" style={{ marginBottom: '2.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <div>
                     <h1 style={{ fontSize: '1.8rem', fontWeight: 'bold' }}>Staff Management</h1>
-                    <p style={{ color: 'var(--text-secondary)' }}>Manage trainers and gym administrators</p>
+                    <p style={{ color: 'var(--text-secondary)' }}>Manage staff and facility administrators</p>
                 </div>
                 <button className="btn btn-primary" onClick={handleAddClick}>
                     <Plus size={18} />
@@ -191,7 +194,7 @@ const Staff = () => {
                                     <td>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
                                             <Calendar size={14} />
-                                            {new Date(s.createdAt).toLocaleDateString()}
+                                            {formatDate(s.createdAt)}
                                         </div>
                                     </td>
                                     <td>
@@ -210,7 +213,7 @@ const Staff = () => {
                             {staff.length === 0 && (
                                 <tr>
                                     <td colSpan="6" style={{ textAlign: 'center', padding: '4rem', color: 'var(--text-muted)' }}>
-                                        No staff members found. Add your first trainer!
+                                        No staff members found. Add your first staff member!
                                     </td>
                                 </tr>
                             )}
@@ -227,7 +230,7 @@ const Staff = () => {
                 <form onSubmit={handleSubmit}>
                     <div className="input-group">
                         <label className="input-label">Full Name</label>
-                        <input className="input-field" required value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} placeholder="Ex. Sarah Smith" />
+                        <input className="input-field" required value={formData.name} onChange={e => setFormData({ ...formData, name: toTitleCase(e.target.value) })} placeholder="Ex. Sarah Smith" />
                     </div>
                     <div className="input-group">
                         <label className="input-label">Email Address</label>
@@ -250,7 +253,12 @@ const Staff = () => {
                     {!isEditMode && (
                         <div className="input-group">
                             <label className="input-label">Temporary Password</label>
-                            <input className="input-field" type="password" required value={formData.password} onChange={e => setFormData({ ...formData, password: e.target.value })} placeholder="••••••••" />
+                            <PasswordInput
+                                required
+                                value={formData.password}
+                                onChange={e => setFormData({ ...formData, password: e.target.value })}
+                                placeholder="••••••••"
+                            />
                         </div>
                     )}
 
@@ -260,16 +268,6 @@ const Staff = () => {
                     </div>
                 </form>
             </Modal>
-
-            <ConfirmationModal
-                isOpen={confirmModal.isOpen}
-                onClose={() => setConfirmModal({ ...confirmModal, isOpen: false })}
-                title={confirmModal.title}
-                message={confirmModal.message}
-                onConfirm={confirmModal.onConfirm}
-                isDangerous={confirmModal.isDangerous}
-                confirmText={confirmModal.confirmText}
-            />
         </div >
     );
 };

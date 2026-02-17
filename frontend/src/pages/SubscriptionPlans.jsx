@@ -2,19 +2,22 @@ import React, { useEffect, useState } from 'react';
 import api from '../api';
 import { Plus, Tag, CheckCircle } from 'lucide-react';
 import { useToast } from '../context/ToastContext';
-import ConfirmationModal from '../components/ConfirmationModal';
+import ActionMenu from '../components/ActionMenu';
 import Modal from '../components/Modal';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { toTitleCase } from '../utils/textCase';
 
 const SubscriptionPlans = () => {
     const [plans, setPlans] = useState([]);
-    const { addToast } = useToast();
+    const { addToast, showConfirm } = useToast();
     const [showModal, setShowModal] = useState(false);
+    const [isEditMode, setIsEditMode] = useState(false);
+    const [currentPlanId, setCurrentPlanId] = useState(null);
     const [formData, setFormData] = useState({
-        name: '', price: '', duration: '', maxMembers: '', maxTrainers: '', description: ''
+        name: '', price: '', duration: '', maxMembers: '', maxStaff: '', description: ''
     });
-
-    // Not implementing delete/edit for simplicity yet, only Create and List per instructions
-    // "Create subscription plans"
+    const location = useLocation();
+    const navigate = useNavigate();
 
     const fetchPlans = async () => {
         try {
@@ -30,16 +33,63 @@ const SubscriptionPlans = () => {
         fetchPlans();
     }, []);
 
+    useEffect(() => {
+        const queryParams = new URLSearchParams(location.search);
+        if (queryParams.get('action') === 'add') {
+            setIsEditMode(false);
+            setFormData({ name: '', price: '', duration: '', maxMembers: '', maxStaff: '', description: '' });
+            setShowModal(true);
+            navigate(location.pathname, { replace: true });
+        }
+    }, [location, navigate]);
+
+    const handleEditClick = (plan) => {
+        setIsEditMode(true);
+        setCurrentPlanId(plan.id);
+        setFormData({
+            name: plan.name,
+            price: plan.price,
+            duration: plan.duration,
+            maxMembers: plan.maxMembers || '',
+            maxStaff: plan.maxStaff || '',
+            description: plan.description || ''
+        });
+        setShowModal(true);
+    };
+
+    const deletePlan = async (planId) => {
+        try {
+            await api.delete(`/subscription-plans/${planId}`);
+            addToast('Plan deleted successfully', 'success');
+            fetchPlans();
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Failed to delete plan', 'error');
+        }
+    };
+
+    const handleDeleteClick = (planId) => {
+        showConfirm(
+            'Are you sure you want to delete this subscription plan? Associated facilities might be affected.',
+            () => deletePlan(planId),
+            'Delete Subscription Plan'
+        );
+    };
+
     const handleSubmit = async (e) => {
         e.preventDefault();
         try {
-            await api.post('/subscription-plans', formData);
-            addToast('Subscription Plan created successfully', 'success');
-            setFormData({ name: '', price: '', duration: '', maxMembers: '', maxTrainers: '', description: '' });
+            if (isEditMode) {
+                await api.put(`/subscription-plans/${currentPlanId}`, formData);
+                addToast('Plan updated successfully', 'success');
+            } else {
+                await api.post('/subscription-plans', formData);
+                addToast('Subscription Plan created successfully', 'success');
+            }
+            setFormData({ name: '', price: '', duration: '', maxMembers: '', maxStaff: '', description: '' });
             setShowModal(false);
             fetchPlans();
         } catch (err) {
-            addToast('Failed to create plan', 'error');
+            addToast(isEditMode ? 'Failed to update plan' : 'Failed to create plan', 'error');
         }
     };
 
@@ -48,9 +98,13 @@ const SubscriptionPlans = () => {
             <div className="page-header" style={{ marginBottom: '2.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <div>
                     <h1 style={{ fontSize: '1.8rem', fontWeight: 'bold' }}>SaaS Subscription Plans</h1>
-                    <p style={{ color: 'var(--text-secondary)' }}>Manage platform subscription tiers for Gyms</p>
+                    <p style={{ color: 'var(--text-secondary)' }}>Manage platform subscription tiers for Facilities</p>
                 </div>
-                <button className="btn btn-primary" onClick={() => setShowModal(true)}>
+                <button className="btn btn-primary" onClick={() => {
+                    setIsEditMode(false);
+                    setFormData({ name: '', price: '', duration: '', maxMembers: '', maxStaff: '', description: '' });
+                    setShowModal(true);
+                }}>
                     <Plus size={18} />
                     <span>Create Plan</span>
                 </button>
@@ -74,6 +128,13 @@ const SubscriptionPlans = () => {
                             </div>
                         </div>
 
+                        <div style={{ position: 'absolute', top: '1rem', right: '0.5rem' }}>
+                            <ActionMenu
+                                onEdit={() => handleEditClick(plan)}
+                                onDelete={() => handleDeleteClick(plan.id)}
+                            />
+                        </div>
+
                         <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', marginBottom: '2rem', lineHeight: '1.6', flex: 1 }}>
                             {plan.description || 'No description provided.'}
                         </p>
@@ -85,7 +146,7 @@ const SubscriptionPlans = () => {
                             </div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '0.9rem', color: 'var(--text-main)' }}>
                                 <CheckCircle size={16} color="var(--primary)" />
-                                <span>Up to {plan.maxTrainers || 'Unlimited'} Trainers</span>
+                                <span>Up to {plan.maxStaff || 'Unlimited'} Staff</span>
                             </div>
                         </div>
                     </div>
@@ -95,50 +156,52 @@ const SubscriptionPlans = () => {
             <Modal
                 isOpen={showModal}
                 onClose={() => setShowModal(false)}
-                title="Create Subscription Plan"
+                title={isEditMode ? 'Edit Subscription Plan' : 'Create Subscription Plan'}
             >
-                <form onSubmit={handleSubmit}>
-                    <div className="input-group">
-                        <label className="input-label">Plan Name</label>
-                        <input className="input-field" required value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} placeholder="e.g. Enterprise" />
-                    </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+                <div>
+                    <form onSubmit={handleSubmit}>
                         <div className="input-group">
-                            <label className="input-label">Price (₹)</label>
-                            <input className="input-field" required type="number" value={formData.price} onChange={e => setFormData({ ...formData, price: e.target.value })} placeholder="5000" />
+                            <label className="input-label">Plan Name</label>
+                            <input className="input-field" required value={formData.name} onChange={e => setFormData({ ...formData, name: toTitleCase(e.target.value) })} placeholder="e.g. Enterprise" />
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+                            <div className="input-group">
+                                <label className="input-label">Price (₹)</label>
+                                <input className="input-field" required type="number" value={formData.price} onChange={e => setFormData({ ...formData, price: e.target.value })} placeholder="5000" />
+                            </div>
+                            <div className="input-group">
+                                <label className="input-label">Duration (Months)</label>
+                                <input className="input-field" required type="number" value={formData.duration} onChange={e => setFormData({ ...formData, duration: e.target.value })} placeholder="12" />
+                            </div>
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+                            <div className="input-group">
+                                <label className="input-label">Max Members</label>
+                                <input className="input-field" type="number" value={formData.maxMembers} onChange={e => setFormData({ ...formData, maxMembers: e.target.value })} placeholder="Optional" />
+                            </div>
+                            <div className="input-group">
+                                <label className="input-label">Max Staff</label>
+                                <input className="input-field" type="number" value={formData.maxStaff} onChange={e => setFormData({ ...formData, maxStaff: e.target.value })} placeholder="Optional" />
+                            </div>
                         </div>
                         <div className="input-group">
-                            <label className="input-label">Duration (Months)</label>
-                            <input className="input-field" required type="number" value={formData.duration} onChange={e => setFormData({ ...formData, duration: e.target.value })} placeholder="12" />
+                            <label className="input-label">Description</label>
+                            <textarea
+                                className="input-field"
+                                rows="3"
+                                value={formData.description}
+                                onChange={e => setFormData({ ...formData, description: e.target.value })}
+                                placeholder="Plan details..."
+                                style={{ resize: 'none' }}
+                            />
                         </div>
-                    </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-                        <div className="input-group">
-                            <label className="input-label">Max Members</label>
-                            <input className="input-field" type="number" value={formData.maxMembers} onChange={e => setFormData({ ...formData, maxMembers: e.target.value })} placeholder="Optional" />
-                        </div>
-                        <div className="input-group">
-                            <label className="input-label">Max Trainers</label>
-                            <input className="input-field" type="number" value={formData.maxTrainers} onChange={e => setFormData({ ...formData, maxTrainers: e.target.value })} placeholder="Optional" />
-                        </div>
-                    </div>
-                    <div className="input-group">
-                        <label className="input-label">Description</label>
-                        <textarea
-                            className="input-field"
-                            rows="3"
-                            value={formData.description}
-                            onChange={e => setFormData({ ...formData, description: e.target.value })}
-                            placeholder="Plan details..."
-                            style={{ resize: 'none' }}
-                        />
-                    </div>
 
-                    <div style={{ marginTop: '2rem', display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>
-                        <button type="button" className="btn btn-secondary" onClick={() => setShowModal(false)}>Cancel</button>
-                        <button type="submit" className="btn btn-primary">Create Plan</button>
-                    </div>
-                </form>
+                        <div style={{ marginTop: '2rem', display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>
+                            <button type="button" className="btn btn-secondary" onClick={() => setShowModal(false)}>Cancel</button>
+                            <button type="submit" className="btn btn-primary">{isEditMode ? 'Update Plan' : 'Create Plan'}</button>
+                        </div>
+                    </form>
+                </div>
             </Modal>
         </div>
     );

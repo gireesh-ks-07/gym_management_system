@@ -4,7 +4,7 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import Sidebar from './components/Sidebar';
 import Navbar from './components/Navbar';
 import Login from './pages/Login';
-import Gyms from './pages/Gyms';
+import Facilities from './pages/Facilities';
 import Clients from './pages/Clients';
 import Staff from './pages/Staff';
 import Payments from './pages/Payments';
@@ -13,11 +13,12 @@ import Dashboard from './pages/Dashboard';
 import Reports from './pages/Reports';
 import Plans from './pages/Plans';
 import SubscriptionPlans from './pages/SubscriptionPlans';
+import FacilityTypes from './pages/FacilityTypes';
 
 const Loader = () => (
   <div className="loader-container">
-    <div className="dumbbell"></div>
-    <div className="loading-text">LIFTING WEIGHTS...</div>
+    <div className="loader-icon"></div>
+    <div className="loading-text">PREPARING YOUR DASHBOARD...</div>
   </div>
 );
 
@@ -41,7 +42,7 @@ const ProtectedRoute = ({ children, roles }) => {
 
       <div className="main-content">
         <Navbar toggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)} />
-        <div style={{ padding: '0 0.5rem' }}>
+        <div>
           {children}
         </div>
       </div>
@@ -58,27 +59,33 @@ const App = () => {
             <Route path="/login" element={<Login />} />
 
             <Route path="/" element={
-              <ProtectedRoute roles={['admin', 'trainer', 'superadmin']}>
+              <ProtectedRoute roles={['admin', 'staff', 'superadmin']}>
                 {/* Dashboard for everyone, content adapts inside */}
                 <Dashboard />
               </ProtectedRoute>
             } />
 
             <Route path="/clients" element={
-              <ProtectedRoute roles={['admin', 'trainer', 'superadmin']}>
+              <ProtectedRoute roles={['admin', 'staff', 'superadmin']}>
                 <Clients />
               </ProtectedRoute>
             } />
 
-            <Route path="/gyms" element={
+            <Route path="/facilities" element={
               <ProtectedRoute roles={['superadmin']}>
-                <Gyms />
+                <Facilities />
               </ProtectedRoute>
             } />
 
             <Route path="/subscription-plans" element={
               <ProtectedRoute roles={['superadmin']}>
                 <SubscriptionPlans />
+              </ProtectedRoute>
+            } />
+
+            <Route path="/facility-types" element={
+              <ProtectedRoute roles={['superadmin']}>
+                <FacilityTypes />
               </ProtectedRoute>
             } />
 
@@ -95,7 +102,7 @@ const App = () => {
             } />
 
             <Route path="/payments" element={
-              <ProtectedRoute roles={['admin', 'trainer']}>
+              <ProtectedRoute roles={['admin', 'staff']}>
                 <Payments />
               </ProtectedRoute>
             } />

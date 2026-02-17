@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import Modal from './Modal';
-import { DollarSign, CreditCard } from 'lucide-react';
+import { DollarSign, CreditCard, Hash } from 'lucide-react';
 import api from '../api';
 import { useToast } from '../context/ToastContext';
 
@@ -10,6 +10,7 @@ const RecordPaymentModal = ({ isOpen, onClose, clients, preSelectedClientId = ''
         clientId: preSelectedClientId,
         amount: '',
         method: 'cash',
+        transactionId: '',
         date: new Date().toISOString().split('T')[0]
     });
 
@@ -31,11 +32,14 @@ const RecordPaymentModal = ({ isOpen, onClose, clients, preSelectedClientId = ''
             return;
         }
 
+        const payload = { ...formData };
+        if (payload.method === 'cash') delete payload.transactionId;
+
         try {
-            await api.post('/payments', formData);
+            await api.post('/payments', payload);
             if (onSuccess) onSuccess();
             onClose();
-            setFormData({ clientId: '', amount: '', method: 'cash', date: new Date().toISOString().split('T')[0] });
+            setFormData({ clientId: '', amount: '', method: 'cash', transactionId: '', date: new Date().toISOString().split('T')[0] });
             addToast('Payment recorded successfully', 'success');
         } catch (err) {
             addToast('Failed to record payment', 'error');
@@ -95,12 +99,24 @@ const RecordPaymentModal = ({ isOpen, onClose, clients, preSelectedClientId = ''
                     </div>
                 </div>
 
+                {formData.method === 'upi' && (
+                    <div className="input-group">
+                        <label className="input-label">UPI Transaction ID (Optional)</label>
+                        <div style={{ position: 'relative' }}>
+                            <span style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }}>
+                                <Hash size={16} />
+                            </span>
+                            <input className="input-field" type="text" value={formData.transactionId} onChange={e => setFormData({ ...formData, transactionId: e.target.value })} placeholder="Enter Transaction ID" style={{ paddingLeft: '2.5rem' }} />
+                        </div>
+                    </div>
+                )}
+
                 <div className="input-group">
                     <label className="input-label">Date</label>
                     <input className="input-field" type="date" required value={formData.date} onChange={e => setFormData({ ...formData, date: e.target.value })} />
                 </div>
 
-                <div style={{ marginTop: '2rem', display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>
+                <div className="form-grid">
                     <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
                     <button type="submit" className="btn btn-primary">Confirm Payment</button>
                 </div>

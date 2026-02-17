@@ -10,11 +10,15 @@ import {
 import { useAuth } from '../context/AuthContext';
 import SuperAdminDashboard from './SuperAdminDashboard';
 
+import { useNavigate } from 'react-router-dom';
+import { formatDate } from '../utils/date';
+
 const Dashboard = () => {
     const { user } = useAuth();
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [subscription, setSubscription] = useState(null);
+    const navigate = useNavigate();
 
     if (user?.role === 'superadmin') {
         return <SuperAdminDashboard />;
@@ -24,7 +28,7 @@ const Dashboard = () => {
         const fetchData = async () => {
             try {
                 // Fetch sub status first or in parallel, but handle independently
-                const subRes = await api.get('/gym/subscription').catch(() => null);
+                const subRes = await api.get('/facility/subscription').catch(() => null);
                 setSubscription(subRes?.data || null);
 
                 if (subRes?.data?.subscriptionStatus !== 'active' && user?.role !== 'superadmin') {
@@ -45,8 +49,8 @@ const Dashboard = () => {
 
     if (loading) return (
         <div className="loader-container">
-            <div className="dumbbell"></div>
-            <div className="loading-text">LOADING METRICS...</div>
+            <div className="loader-icon"></div>
+            <div className="loading-text">PREPARING DASHBOARD...</div>
         </div>
     );
 
@@ -71,7 +75,7 @@ const Dashboard = () => {
                 </h1>
                 <p style={{ maxWidth: '500px', color: 'var(--text-secondary)', lineHeight: '1.6' }}>
                     {isExpired
-                        ? 'Your gym\'s subscription plan has expired. To continue using the platform and accessing your data, please renew your subscription.'
+                        ? 'Your facility\'s subscription plan has expired. To continue using the platform and accessing your data, please renew your subscription.'
                         : 'Your account has been suspended by the platform administrator. Please contact support for assistance.'}
                 </p>
                 <div style={{ marginTop: '1rem', padding: '1rem', background: 'var(--bg-card)', borderRadius: '12px', border: '1px solid var(--border-color)', minWidth: '300px' }}>
@@ -90,6 +94,10 @@ const Dashboard = () => {
     if (!data) return <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>Failed to load dashboard data.</div>;
 
     const { stats, recentClients, revenueChartData, revenueByMethod, planChartData } = data;
+    const memberLimit = subscription?.SubscriptionPlan?.maxMembers ?? subscription?.subscriptionPlan?.maxMembers ?? null;
+    const staffLimit = subscription?.SubscriptionPlan?.maxStaff ?? subscription?.subscriptionPlan?.maxStaff ?? null;
+    const memberLimitExceeded = memberLimit !== null && Number(stats.totalClients) >= Number(memberLimit);
+    const staffLimitExceeded = staffLimit !== null && Number(stats.activeStaff) >= Number(staffLimit);
 
     const COLORS = ['#22c55e', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6'];
 
@@ -107,8 +115,18 @@ const Dashboard = () => {
         </svg>
     );
 
-    const StatCard = ({ title, value, icon, color, trend }) => (
-        <div className="card" style={{ padding: '1.5rem', position: 'relative', overflow: 'hidden' }}>
+    const StatCard = ({ title, value, icon, color, trend, path }) => (
+        <div
+            className="card"
+            style={{
+                padding: '1.5rem',
+                position: 'relative',
+                overflow: 'hidden',
+                cursor: path ? 'pointer' : 'default',
+                transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
+            }}
+            onClick={() => path && navigate(path)}
+        >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div style={{ padding: '0.75rem', borderRadius: '12px', background: `${color}15`, color: color }}>
                     {icon}
@@ -138,10 +156,10 @@ const Dashboard = () => {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '2.5rem' }}>
                 <div>
                     <h1 style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>Dashboard</h1>
-                    <p style={{ color: 'var(--text-muted)' }}>Real-time overview of your gym.</p>
+                    <p style={{ color: 'var(--text-muted)' }}>Real-time overview of your facility.</p>
                 </div>
 
-                <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
                     {subscription && (
                         <div className={`card ${subscription.subscriptionStatus === 'active' ? 'status-active' : 'status-expired'}`}
                             style={{
@@ -161,7 +179,7 @@ const Dashboard = () => {
                                     {subscription.subscriptionStatus === 'active' ? 'Active' : 'Expired'}
                                     {subscription.subscriptionExpiresAt && (
                                         <span style={{ fontWeight: 'normal', opacity: 0.8, marginLeft: '5px' }}>
-                                            (Exp: {new Date(subscription.subscriptionExpiresAt).toLocaleDateString()})
+                                            (Exp: {formatDate(subscription.subscriptionExpiresAt)})
                                         </span>
                                     )}
                                 </div>
@@ -171,6 +189,23 @@ const Dashboard = () => {
                 </div>
             </div>
 
+            {(memberLimitExceeded || staffLimitExceeded) && (
+                <div
+                    className="card"
+                    style={{
+                        marginBottom: '1.5rem',
+                        border: '1px solid rgba(239, 68, 68, 0.5)',
+                        background: 'rgba(239, 68, 68, 0.08)',
+                        color: 'var(--danger)',
+                        padding: '0.9rem 1rem',
+                        fontWeight: 600
+                    }}
+                >
+                    {memberLimitExceeded && <div>Exceeded limit: Members {stats.totalClients}/{memberLimit}</div>}
+                    {staffLimitExceeded && <div>Exceeded limit: Staff {stats.activeStaff}/{staffLimit}</div>}
+                </div>
+            )}
+
             {/* KPI Cards */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.5rem', marginBottom: '2.5rem' }}>
                 <StatCard
@@ -179,25 +214,29 @@ const Dashboard = () => {
                     icon={<Users size={24} />}
                     color="#22c55e"
                     trend={12.5}
+                    path="/clients"
                 />
                 <StatCard
                     title="Monthly Revenue"
                     value={`₹${stats.totalRevenue.toLocaleString()}`}
                     icon={<Wallet size={24} />}
-                    color="#3b82f6"
+                    color="#10B981"
                     trend={8.2}
+                    path="/payments"
                 />
                 <StatCard
-                    title="Active Trainers"
-                    value={stats.activeTrainers}
-                    icon={<Dumbbell size={24} />}
+                    title="Active Staff"
+                    value={stats.activeStaff}
+                    icon={<Activity size={24} />}
                     color="#f59e0b"
+                    path="/staff"
                 />
                 <StatCard
-                    title="Plan Expiries"
-                    value="3"
+                    title="Expired Members"
+                    value={stats.expiredClients ?? stats.dueClients ?? 0}
                     icon={<AlertCircle size={24} />}
                     color="#ef4444"
+                    path="/clients?status=payment_due"
                 />
             </div>
 
@@ -351,7 +390,7 @@ const Dashboard = () => {
                                         )}
                                     </td>
                                     <td style={{ color: 'var(--text-secondary)' }}>
-                                        {new Date(client.joiningDate).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                                        {formatDate(client.joiningDate)}
                                     </td>
                                     <td>
                                         <span className="status-badge status-active">Active</span>

@@ -1,58 +1,60 @@
 import React, { useEffect, useState } from 'react';
 import api from '../api';
-import { Plus, MapPin, ShieldCheck, Dumbbell, Users, Calendar } from 'lucide-react';
+import { Plus, MapPin, ShieldCheck, Dumbbell, Users, Calendar, Music, Activity, Sword, Heart, Layers } from 'lucide-react';
 import ActionMenu from '../components/ActionMenu';
 import Modal from '../components/Modal';
-import ConfirmationModal from '../components/ConfirmationModal';
+import PasswordInput from '../components/PasswordInput';
 import { useToast } from '../context/ToastContext';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { formatDate } from '../utils/date';
+import { toTitleCase } from '../utils/textCase';
 
-const Gyms = () => {
-    const [gyms, setGyms] = useState([]);
+const Facilities = () => {
+    const [facilities, setFacilities] = useState([]);
     const [showModal, setShowModal] = useState(false);
     const [isEditMode, setIsEditMode] = useState(false);
-    const [currentGymId, setCurrentGymId] = useState(null);
+    const [currentFacilityId, setCurrentFacilityId] = useState(null);
     const [formData, setFormData] = useState({
-        name: '', address: '', adminEmail: '', adminPassword: '', adminName: '', planId: ''
+        name: '', address: '', adminEmail: '', adminPassword: '', adminName: '', planId: '', facilityTypeId: ''
     });
     const [plans, setPlans] = useState([]);
-    // Updated subscription modal state to hold full gym object and tab
-    const [subscriptionModal, setSubscriptionModal] = useState({ isOpen: false, gym: null, tab: 'plan' });
+    const [facilityTypes, setFacilityTypes] = useState([]);
+    // Updated subscription modal state to hold full facility object and tab
+    const [subscriptionModal, setSubscriptionModal] = useState({ isOpen: false, facility: null, tab: 'plan' });
     const [manualData, setManualData] = useState({ status: '', expiresAt: '' });
 
-    const { addToast } = useToast();
-    const [confirmModal, setConfirmModal] = useState({
-        isOpen: false,
-        title: '',
-        message: '',
-        onConfirm: () => { },
-        isDangerous: false
-    });
+    const { addToast, showConfirm } = useToast();
+    const [passwordModal, setPasswordModal] = useState({ isOpen: false, facilityId: null, newPassword: '' });
 
     const location = useLocation();
     const navigate = useNavigate();
 
-    const fetchGyms = async () => {
+    const fetchFacilities = async () => {
         try {
-            const res = await api.get('/gyms');
-            const plansRes = await api.get('/subscription-plans');
-            setGyms(res.data);
-            setPlans(plansRes.data);
+            const [facsRes, plansRes, typesRes] = await Promise.all([
+                api.get('/facilities').catch(e => { console.error('Fac error', e); return { data: [] }; }),
+                api.get('/subscription-plans').catch(e => { console.error('Plans error', e); return { data: [] }; }),
+                api.get('/api/facility-types').catch(e => { console.error('Types error', e); return { data: [] }; })
+            ]);
+
+            setFacilities(facsRes.data);
+            setPlans(plansRes.data || []);
+            setFacilityTypes(typesRes.data || []);
         } catch (err) {
-            console.error(err);
+            console.error('General fetch error:', err);
             addToast('Failed to fetch data', 'error');
         }
     };
 
     useEffect(() => {
-        fetchGyms();
+        fetchFacilities();
     }, []);
 
     useEffect(() => {
         const queryParams = new URLSearchParams(location.search);
         if (queryParams.get('action') === 'add') {
             setIsEditMode(false);
-            setFormData({ name: '', address: '', adminEmail: '', adminPassword: '', adminName: '', planId: '' });
+            setFormData({ name: '', address: '', adminEmail: '', adminPassword: '', adminName: '', planId: '', facilityTypeId: '' });
             setShowModal(true);
             navigate(location.pathname, { replace: true });
         }
@@ -60,49 +62,47 @@ const Gyms = () => {
 
     const handleAddClick = () => {
         setIsEditMode(false);
-        setFormData({ name: '', address: '', adminEmail: '', adminPassword: '', adminName: '', planId: '' });
+        setFormData({ name: '', address: '', adminEmail: '', adminPassword: '', adminName: '', planId: '', facilityTypeId: '' });
         setShowModal(true);
     };
 
-    const handleEditClick = (gym) => {
+    const handleEditClick = (facility) => {
         setIsEditMode(true);
-        setCurrentGymId(gym.id);
+        setCurrentFacilityId(facility.id);
         setFormData({
-            name: gym.name,
-            address: gym.address || '',
+            name: facility.name,
+            address: facility.address || '',
             adminEmail: '',
             adminPassword: '',
-            adminName: ''
+            adminName: '',
+            facilityTypeId: facility.facilityTypeId || ''
         });
         setShowModal(true);
     };
 
-    const deleteGym = async (gymId) => {
+    const deleteFacility = async (facilityId) => {
         try {
-            await api.delete(`/gyms/${gymId}`);
-            addToast('Gym deleted successfully', 'success');
-            fetchGyms();
+            await api.delete(`/facilities/${facilityId}`);
+            addToast('Facility deleted successfully', 'success');
+            fetchFacilities();
         } catch (err) {
-            addToast('Failed to delete gym', 'error');
+            addToast('Failed to delete facility', 'error');
         }
     };
 
-    const handleDeleteClick = (gymId) => {
-        setConfirmModal({
-            isOpen: true,
-            title: 'Delete Gym',
-            message: 'Are you sure you want to delete this gym? This action cannot be undone.',
-            onConfirm: () => deleteGym(gymId),
-            isDangerous: true,
-            confirmText: 'Delete'
-        });
+    const handleDeleteClick = (facilityId) => {
+        showConfirm(
+            'Are you sure you want to delete this facility? This action cannot be undone and all associated data will be permanently removed.',
+            () => deleteFacility(facilityId),
+            'Delete Facility'
+        );
     };
 
     const handleSubmit = async (e) => {
         e.preventDefault();
 
         if (!formData.name.trim()) {
-            addToast('Gym name is required', 'error');
+            addToast('Facility name is required', 'error');
             return;
         }
 
@@ -123,36 +123,38 @@ const Gyms = () => {
 
         try {
             if (isEditMode) {
-                await api.put(`/gyms/${currentGymId}`, {
+                await api.put(`/facilities/${currentFacilityId}`, {
                     name: formData.name,
-                    address: formData.address
+                    type: formData.type,
+                    address: formData.address,
+                    facilityTypeId: formData.facilityTypeId || null
                 });
-                addToast('Gym updated successfully', 'success');
+                addToast('Facility updated successfully', 'success');
             } else {
-                await api.post('/gyms', formData);
-                addToast('Gym created successfully', 'success');
+                await api.post('/facilities', formData);
+                addToast('Facility created successfully', 'success');
             }
             setShowModal(false);
-            setFormData({ name: '', address: '', adminEmail: '', adminPassword: '', adminName: '', planId: '' });
-            fetchGyms();
+            setFormData({ name: '', address: '', adminEmail: '', adminPassword: '', adminName: '', planId: '', facilityTypeId: '' });
+            fetchFacilities();
         } catch (err) {
-            addToast(isEditMode ? 'Failed to update gym' : 'Failed to create gym', 'error');
+            addToast(isEditMode ? 'Failed to update facility' : 'Failed to create facility', 'error');
         }
     };
 
-    const openSubscriptionModal = (gym) => {
-        const expires = gym.subscriptionExpiresAt ? new Date(gym.subscriptionExpiresAt).toISOString().split('T')[0] : '';
-        setManualData({ status: gym.subscriptionStatus, expiresAt: expires });
-        setSubscriptionModal({ isOpen: true, gym: gym, tab: 'plan', selectedPlanId: gym.subscriptionPlanId });
+    const openSubscriptionModal = (facility) => {
+        const expires = facility.subscriptionExpiresAt ? new Date(facility.subscriptionExpiresAt).toISOString().split('T')[0] : '';
+        setManualData({ status: facility.subscriptionStatus, expiresAt: expires });
+        setSubscriptionModal({ isOpen: true, facility: facility, tab: 'plan', selectedPlanId: facility.subscriptionPlanId });
     };
 
     const handlePlanChange = async () => {
         if (!subscriptionModal.selectedPlanId) return addToast('Please select a plan', 'error');
         try {
-            await api.post(`/gyms/${subscriptionModal.gym.id}/assign-plan`, { planId: subscriptionModal.selectedPlanId });
+            await api.post(`/facilities/${subscriptionModal.facility.id}/assign-plan`, { planId: subscriptionModal.selectedPlanId });
             addToast('Plan assigned successfully', 'success');
             setSubscriptionModal({ ...subscriptionModal, isOpen: false });
-            fetchGyms();
+            fetchFacilities();
         } catch (err) {
             addToast('Failed to assign plan', 'error');
         }
@@ -162,32 +164,83 @@ const Gyms = () => {
         try {
             const payload = { ...manualData };
             if (!payload.expiresAt) delete payload.expiresAt;
-            await api.post(`/gyms/${subscriptionModal.gym.id}/subscription-update`, payload);
+            await api.post(`/facilities/${subscriptionModal.facility.id}/subscription-update`, payload);
             addToast('Subscription updated successfully', 'success');
             setSubscriptionModal({ ...subscriptionModal, isOpen: false });
-            fetchGyms();
+            fetchFacilities();
         } catch (err) {
             addToast('Failed to update subscription', 'error');
         }
     };
 
 
+    const handleResetPassword = async (e) => {
+        e.preventDefault();
+        try {
+            await api.post(`/facilities/${passwordModal.facilityId}/reset-password`, { newPassword: passwordModal.newPassword });
+            addToast('Admin password reset successfully', 'success');
+            setPasswordModal({ isOpen: false, facilityId: null, newPassword: '' });
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Failed to reset password', 'error');
+        }
+    };
+
+    const getTypeIcon = (facility) => {
+        if (facility.FacilityType) {
+            switch (facility.FacilityType.icon) {
+                case 'Activity': return <Activity size={24} />;
+                case 'Dumbbell': return <Dumbbell size={24} />;
+                case 'Music': return <Music size={24} />;
+                case 'Sword': return <Sword size={18} />;
+                case 'Heart': return <Heart size={18} />;
+                case 'Layers': return <Layers size={18} />;
+                default: return <Activity size={24} />;
+            }
+        }
+        switch (facility.type) {
+            case 'dance_school': return <Music size={24} />;
+            case 'gym': return <Dumbbell size={24} />;
+            default: return <Activity size={24} />;
+        }
+    };
+
+    const getTypeLabel = (facility) => {
+        return facility.FacilityType ? facility.FacilityType.name : 'Uncategorized';
+    };
+
+    const getFacilityUserDetails = (facility) => {
+        const fallbackAdminCount = facility.Users ? facility.Users.filter(u => u.role === 'admin').length : 0;
+        const fallbackStaffCount = facility.Users ? facility.Users.filter(u => u.role === 'staff').length : 0;
+
+        const adminCount = facility.userDetails?.adminCount ?? fallbackAdminCount;
+        const staffCount = facility.userDetails?.staffCount ?? fallbackStaffCount;
+
+        return {
+            totalUsers: facility.userDetails?.totalUsers ?? (adminCount + staffCount),
+            adminCount,
+            staffCount,
+            memberCount: facility.userDetails?.memberCount ?? 0
+        };
+    };
+
     return (
         <div className="animate-fade-in">
             <div className="page-header" style={{ marginBottom: '2.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <div>
-                    <h1 style={{ fontSize: '1.8rem', fontWeight: 'bold' }}>Gym Locations</h1>
-                    <p style={{ color: 'var(--text-secondary)' }}>Manage all fitness centers and administrators</p>
+                    <h1 style={{ fontSize: '1.8rem', fontWeight: 'bold' }}>Facilities</h1>
+                    <p style={{ color: 'var(--text-secondary)' }}>Manage all facilities and administrators</p>
                 </div>
                 <button className="btn btn-primary" onClick={handleAddClick}>
                     <Plus size={18} />
-                    <span>Add New Gym</span>
+                    <span>Add New Facility</span>
                 </button>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '2rem' }}>
-                {gyms.map((gym, index) => (
-                    <div className="card" key={gym.id} style={{
+                {facilities.map((facility, index) => {
+                    const details = getFacilityUserDetails(facility);
+                    return (
+                    <div className="card" key={facility.id} style={{
                         animationDelay: `${index * 0.1}s`,
                         padding: '0',
                         overflow: 'visible',
@@ -205,25 +258,47 @@ const Gyms = () => {
                             borderTopRightRadius: 'var(--radius-md)'
                         }}>
                             <div style={{ padding: '12px', background: 'rgba(34, 197, 94, 0.1)', borderRadius: '12px', color: 'var(--primary)' }}>
-                                <Dumbbell size={24} />
+                                {getTypeIcon(facility)}
                             </div>
                             <ActionMenu
-                                onEdit={() => handleEditClick(gym)}
-                                onDelete={() => handleDeleteClick(gym.id)}
+                                onEdit={() => handleEditClick(facility)}
+                                onDelete={() => handleDeleteClick(facility.id)}
+                                onPasswordReset={() => setPasswordModal({ isOpen: true, facilityId: facility.id, newPassword: '' })}
                             />
                         </div>
 
                         <div style={{ padding: '1.5rem', flex: 1 }}>
-                            <h3 style={{ fontSize: '1.25rem', marginBottom: '0.5rem', color: 'var(--text-highlight)' }}>{gym.name}</h3>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                                <h3 style={{ fontSize: '1.25rem', color: 'var(--text-highlight)' }}>{facility.name}</h3>
+                                <span style={{ fontSize: '0.75rem', padding: '2px 8px', borderRadius: '12px', background: 'var(--bg-card)', border: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}>
+                                    {getTypeLabel(facility)}
+                                </span>
+                            </div>
 
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
                                 <MapPin size={16} color="var(--accent-orange)" />
-                                {gym.address || 'No address provided'}
+                                {facility.address || 'No address provided'}
                             </div>
 
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.75rem', background: 'var(--bg-body)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
                                 <Users size={16} color="var(--accent-blue)" />
-                                <span style={{ fontSize: '0.9rem', color: 'var(--text-main)', fontWeight: '500' }}>{gym.Users ? gym.Users.length : 0} Staff Members</span>
+                                <span style={{ fontSize: '0.9rem', color: 'var(--text-main)', fontWeight: '500' }}>
+                                    {details.totalUsers} Users (Admins + Staff)
+                                </span>
+                            </div>
+                            <div style={{ marginTop: '0.75rem', display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '0.5rem' }}>
+                                <div style={{ padding: '0.5rem', border: '1px solid var(--border-color)', borderRadius: '8px', textAlign: 'center' }}>
+                                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Admins</div>
+                                    <div style={{ fontSize: '1rem', fontWeight: '600' }}>{details.adminCount}</div>
+                                </div>
+                                <div style={{ padding: '0.5rem', border: '1px solid var(--border-color)', borderRadius: '8px', textAlign: 'center' }}>
+                                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Staff</div>
+                                    <div style={{ fontSize: '1rem', fontWeight: '600' }}>{details.staffCount}</div>
+                                </div>
+                                <div style={{ padding: '0.5rem', border: '1px solid var(--border-color)', borderRadius: '8px', textAlign: 'center' }}>
+                                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Members</div>
+                                    <div style={{ fontSize: '1rem', fontWeight: '600' }}>{details.memberCount}</div>
+                                </div>
                             </div>
                         </div>
 
@@ -234,52 +309,70 @@ const Gyms = () => {
                         }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                                 <ShieldCheck size={14} />
-                                <span>ID: #{gym.id} • Created: {new Date(gym.createdAt).toLocaleDateString()}</span>
+                                <span>ID: #{facility.id} • Created: {formatDate(facility.createdAt)}</span>
                             </div>
                             <div style={{ marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                 <div style={{ fontSize: '0.8rem' }}>
                                     <div style={{ color: 'var(--text-secondary)' }}>Status</div>
                                     <div style={{
-                                        color: gym.subscriptionStatus === 'active' ? 'var(--success)' : 'var(--danger)',
+                                        color: facility.subscriptionStatus === 'active' ? 'var(--success)' : 'var(--danger)',
                                         fontWeight: '600', textTransform: 'uppercase', fontSize: '0.75rem'
                                     }}>
-                                        {gym.subscriptionStatus}
+                                        {facility.subscriptionStatus}
                                     </div>
-                                    {gym.subscriptionExpiresAt && (
+                                    {facility.subscriptionExpiresAt && (
                                         <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                                            Exp: {new Date(gym.subscriptionExpiresAt).toLocaleDateString()}
+                                            Exp: {formatDate(facility.subscriptionExpiresAt)}
                                         </div>
                                     )}
                                 </div>
-                                <button className="btn btn-secondary" style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }} onClick={() => openSubscriptionModal(gym)}>
+                                <button className="btn btn-secondary" style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }} onClick={() => openSubscriptionModal(facility)}>
                                     Manage Subscription
                                 </button>
                             </div>
                         </div>
                     </div>
-                ))}
+                    );
+                })}
             </div>
 
-            {gyms.length === 0 && (
+            {facilities.length === 0 && (
                 <div style={{ textAlign: 'center', padding: '4rem', color: 'var(--text-muted)' }}>
                     <Dumbbell size={48} style={{ opacity: 0.2, marginBottom: '1rem' }} />
-                    <p>No gyms found. Click "Add New Gym" to get started.</p>
+                    <p>No facilities found. Click "Add New Facility" to get started.</p>
                 </div>
             )}
 
             <Modal
                 isOpen={showModal}
                 onClose={() => setShowModal(false)}
-                title={isEditMode ? 'Edit Gym Details' : 'Register New Gym'}
+                title={isEditMode ? 'Edit Facility Details' : 'Register New Facility'}
             >
                 <form onSubmit={handleSubmit}>
                     <div className="input-group">
-                        <label className="input-label">Gym Name</label>
-                        <input className="input-field" required value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} placeholder="e.g. Gold's Gym Downtown" />
+                        <label className="input-label">Facility Name</label>
+                        <input className="input-field" required value={formData.name} onChange={e => setFormData({ ...formData, name: toTitleCase(e.target.value) })} placeholder="e.g. Gold's Gym Downtown" />
                     </div>
+
+
+
+                    <div className="input-group">
+                        <label className="input-label">Facility Category</label>
+                        <select
+                            className="input-field"
+                            value={formData.facilityTypeId}
+                            onChange={e => setFormData({ ...formData, facilityTypeId: e.target.value })}
+                        >
+                            <option value="">Select Category</option>
+                            {facilityTypes.map(ft => (
+                                <option key={ft.id} value={ft.id}>{ft.name}</option>
+                            ))}
+                        </select>
+                    </div>
+
                     <div className="input-group">
                         <label className="input-label">Address</label>
-                        <input className="input-field" value={formData.address} onChange={e => setFormData({ ...formData, address: e.target.value })} placeholder="e.g. 123 Main St, New York" />
+                        <input className="input-field" value={formData.address} onChange={e => setFormData({ ...formData, address: toTitleCase(e.target.value) })} placeholder="e.g. 123 Main St, New York" />
                     </div>
 
                     {!isEditMode && (
@@ -302,23 +395,28 @@ const Gyms = () => {
                                 <h3 style={{ fontSize: '0.8rem', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '1rem', letterSpacing: '0.05em', fontWeight: '600' }}>Initial Administrator</h3>
                                 <div className="input-group">
                                     <label className="input-label">Admin Name</label>
-                                    <input className="input-field" required value={formData.adminName} onChange={e => setFormData({ ...formData, adminName: e.target.value })} placeholder="Full Name" />
+                                    <input className="input-field" required value={formData.adminName} onChange={e => setFormData({ ...formData, adminName: toTitleCase(e.target.value) })} placeholder="Full Name" />
                                 </div>
                                 <div className="input-group">
                                     <label className="input-label">Email</label>
-                                    <input className="input-field" type="email" required value={formData.adminEmail} onChange={e => setFormData({ ...formData, adminEmail: e.target.value })} placeholder="admin@gym.com" />
+                                    <input className="input-field" type="email" required value={formData.adminEmail} onChange={e => setFormData({ ...formData, adminEmail: e.target.value })} placeholder="admin@facility.com" />
                                 </div>
                                 <div className="input-group" style={{ marginBottom: 0 }}>
                                     <label className="input-label">Password</label>
-                                    <input className="input-field" type="password" required value={formData.adminPassword} onChange={e => setFormData({ ...formData, adminPassword: e.target.value })} placeholder="••••••••" />
+                                    <PasswordInput
+                                        required
+                                        value={formData.adminPassword}
+                                        onChange={e => setFormData({ ...formData, adminPassword: e.target.value })}
+                                        placeholder="••••••••"
+                                    />
                                 </div>
                             </div>
                         </>
                     )}
 
-                    <div style={{ display: 'flex', gap: '1rem', marginTop: '2rem', justifyContent: 'flex-end' }}>
+                    <div className="form-grid">
                         <button type="button" className="btn btn-secondary" onClick={() => setShowModal(false)}>Cancel</button>
-                        <button type="submit" className="btn btn-primary">{isEditMode ? 'Save Changes' : 'Create Gym'}</button>
+                        <button type="submit" className="btn btn-primary">{isEditMode ? 'Save Changes' : 'Create Facility'}</button>
                     </div>
                 </form>
             </Modal>
@@ -382,7 +480,7 @@ const Gyms = () => {
                                     Assigning a plan will automatically set the expiry date based on the plan duration from today.
                                 </p>
                             </div>
-                            <div style={{ display: 'flex', gap: '1rem', marginTop: '2rem', justifyContent: 'flex-end' }}>
+                            <div className="form-grid">
                                 <button className="btn btn-secondary" onClick={() => setSubscriptionModal({ ...subscriptionModal, isOpen: false })}>Cancel</button>
                                 <button className="btn btn-primary" onClick={handlePlanChange}>Update Plan</button>
                             </div>
@@ -413,7 +511,7 @@ const Gyms = () => {
                                     Manually set the expiry date. This overrides the plan's default duration.
                                 </p>
                             </div>
-                            <div style={{ display: 'flex', gap: '1rem', marginTop: '2rem', justifyContent: 'flex-end' }}>
+                            <div className="form-grid">
                                 <button className="btn btn-secondary" onClick={() => setSubscriptionModal({ ...subscriptionModal, isOpen: false })}>Cancel</button>
                                 <button className="btn btn-primary" onClick={handleManualUpdate}>Save Changes</button>
                             </div>
@@ -422,17 +520,34 @@ const Gyms = () => {
                 </div>
             </Modal>
 
-            <ConfirmationModal
-                isOpen={confirmModal.isOpen}
-                onClose={() => setConfirmModal({ ...confirmModal, isOpen: false })}
-                title={confirmModal.title}
-                message={confirmModal.message}
-                onConfirm={confirmModal.onConfirm}
-                isDangerous={confirmModal.isDangerous}
-                confirmText={confirmModal.confirmText}
-            />
+            <Modal
+                isOpen={passwordModal.isOpen}
+                onClose={() => setPasswordModal({ ...passwordModal, isOpen: false })}
+                title="Reset Admin Password"
+            >
+                <form onSubmit={handleResetPassword}>
+                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
+                        Enter a new password for the primary administrator of this facility.
+                    </p>
+                    <div className="input-group">
+                        <label className="input-label">New Password</label>
+                        <PasswordInput
+                            required
+                            minLength={6}
+                            value={passwordModal.newPassword}
+                            onChange={e => setPasswordModal({ ...passwordModal, newPassword: e.target.value })}
+                            placeholder="Min 6 characters"
+                            autoFocus
+                        />
+                    </div>
+                    <div className="form-grid">
+                        <button type="button" className="btn btn-secondary" onClick={() => setPasswordModal({ ...passwordModal, isOpen: false })}>Cancel</button>
+                        <button type="submit" className="btn btn-primary">Reset Password</button>
+                    </div>
+                </form>
+            </Modal>
         </div>
     );
 };
 
-export default Gyms;
+export default Facilities;

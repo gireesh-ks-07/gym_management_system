@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { useNavigate } from 'react-router-dom';
-import { Dumbbell, ArrowRight, Lock, Mail } from 'lucide-react';
+import { Activity, ArrowRight, Lock, Mail } from 'lucide-react';
+import PasswordInput from '../components/PasswordInput';
 
 const Login = () => {
     const [email, setEmail] = useState('');
@@ -16,8 +17,7 @@ const Login = () => {
 
     useEffect(() => {
         if (user) {
-            if (user.role === 'superadmin') navigate('/gyms');
-            else navigate('/');
+            navigate('/');
         }
     }, [user, navigate]);
 
@@ -55,7 +55,7 @@ const Login = () => {
             <div className="card animate-slide-up" style={{ width: '100%', maxWidth: '440px', padding: '2.5rem', border: '1px solid var(--border-color)' }}>
                 <div style={{ textAlign: 'center', marginBottom: '2.5rem' }}>
                     <div style={{
-                        background: 'linear-gradient(135deg, var(--primary), #15803d)',
+                        background: 'var(--primary)',
                         width: '64px',
                         height: '64px',
                         borderRadius: '16px',
@@ -63,12 +63,12 @@ const Login = () => {
                         alignItems: 'center',
                         justifyContent: 'center',
                         margin: '0 auto 1.5rem',
-                        boxShadow: '0 0 20px var(--primary-glow)'
                     }}>
-                        <Dumbbell size={32} color="white" />
+                        <Activity size={32} color="white" />
                     </div>
-                    <h1 style={{ fontSize: '1.75rem', marginBottom: '0.5rem' }}>Welcome Back</h1>
-                    <p style={{ color: 'var(--text-secondary)' }}>Sign in to access your dashboard</p>
+                    <h1 style={{ fontSize: '1.75rem', marginBottom: '0.25rem', fontWeight: '900', letterSpacing: '-0.05em' }}>OpsMonks</h1>
+                    <div style={{ fontSize: '0.75rem', fontWeight: '700', color: 'var(--primary)', letterSpacing: '0.1em', marginBottom: '1rem' }}>AI POWERED SOLUTIONS</div>
+                    <p style={{ color: 'var(--text-secondary)' }}>Sign in to manage your empire</p>
                 </div>
 
                 {error && (
@@ -104,18 +104,13 @@ const Login = () => {
                     </div>
                     <div className="input-group">
                         <label className="input-label">Password</label>
-                        <div style={{ position: 'relative' }}>
-                            <Lock size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                            <input
-                                type="password"
-                                required
-                                value={password}
-                                onChange={(e) => setPassword(e.target.value)}
-                                placeholder="••••••••"
-                                className="input-field"
-                                style={{ paddingLeft: '2.75rem' }}
-                            />
-                        </div>
+                        <PasswordInput
+                            required
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            placeholder="••••••••"
+                            leftIcon={<Lock size={18} />}
+                        />
                     </div>
 
                     <button

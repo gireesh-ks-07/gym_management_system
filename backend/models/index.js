@@ -40,24 +40,38 @@ const User = sequelize.define('User', {
     email: { type: DataTypes.STRING, allowNull: false, unique: true },
     password: { type: DataTypes.STRING, allowNull: false },
     role: {
-        type: DataTypes.ENUM('superadmin', 'admin', 'trainer'),
-        defaultValue: 'trainer'
+        type: DataTypes.ENUM('superadmin', 'admin', 'staff'),
+        defaultValue: 'staff'
     },
     phone: { type: DataTypes.STRING, allowNull: true },
 });
 
-// SaaS Subscription Plan (For Gyms)
+// SaaS Subscription Plan (For Facilities)
 const SubscriptionPlan = sequelize.define('SubscriptionPlan', {
     name: { type: DataTypes.STRING, allowNull: false, unique: true }, // Basic, Pro, Enterprise
     price: { type: DataTypes.FLOAT, allowNull: false },
     duration: { type: DataTypes.INTEGER, allowNull: false }, // in months
     maxMembers: { type: DataTypes.INTEGER, allowNull: true }, // Optional limit
-    maxTrainers: { type: DataTypes.INTEGER, allowNull: true }, // Optional limit
+    maxStaff: { type: DataTypes.INTEGER, allowNull: true }, // Optional limit
     description: { type: DataTypes.TEXT, allowNull: true }
 });
 
-const Gym = sequelize.define('Gym', {
+const FacilityType = sequelize.define('FacilityType', {
+    name: { type: DataTypes.STRING, allowNull: false, unique: true },
+    icon: { type: DataTypes.STRING, defaultValue: 'Activity' },
+    memberFormConfig: {
+        type: DataTypes.JSON,
+        defaultValue: [] // Array of { label, name, type, required, options? }
+    }
+});
+
+const Facility = sequelize.define('Facility', {
     name: { type: DataTypes.STRING, allowNull: false },
+    type: { // Keep for backward compatibility or simple labelling
+        type: DataTypes.ENUM('gym', 'dance_school', 'boxing_school', 'yoga_studio', 'other'),
+        defaultValue: 'gym',
+        allowNull: false
+    },
     address: { type: DataTypes.STRING, allowNull: true },
     subscriptionStatus: {
         type: DataTypes.ENUM('active', 'expired', 'suspended'),
@@ -68,10 +82,10 @@ const Gym = sequelize.define('Gym', {
 
 const Client = sequelize.define('Client', {
     name: { type: DataTypes.STRING, allowNull: false },
-    email: { type: DataTypes.STRING, allowNull: true }, // Clients might not have email login
+    email: { type: DataTypes.STRING, allowNull: true },
     phone: { type: DataTypes.STRING, allowNull: false },
-    height: { type: DataTypes.FLOAT, allowNull: true }, // in cm
-    weight: { type: DataTypes.FLOAT, allowNull: true }, // in kg
+    height: { type: DataTypes.FLOAT, allowNull: true },
+    weight: { type: DataTypes.FLOAT, allowNull: true },
     joiningDate: { type: DataTypes.DATEONLY, defaultValue: DataTypes.NOW },
     gender: { type: DataTypes.ENUM('male', 'female', 'other'), allowNull: false, defaultValue: 'male' },
     aadhaar_number: { type: DataTypes.STRING, allowNull: true },
@@ -80,7 +94,9 @@ const Client = sequelize.define('Client', {
         type: DataTypes.ENUM('active', 'inactive', 'payment_due'),
         defaultValue: 'inactive'
     },
-    planExpiresAt: { type: DataTypes.DATE, allowNull: true }
+    billingRenewalDate: { type: DataTypes.DATEONLY, allowNull: true },
+    planExpiresAt: { type: DataTypes.DATE, allowNull: true },
+    customFields: { type: DataTypes.JSON, defaultValue: {} } // Store custom field values
 });
 
 const Attendance = sequelize.define('Attendance', {
@@ -92,25 +108,39 @@ const Attendance = sequelize.define('Attendance', {
 const Payment = sequelize.define('Payment', {
     amount: { type: DataTypes.FLOAT, allowNull: false },
     method: { type: DataTypes.ENUM('cash', 'upi'), allowNull: false },
-    date: { type: DataTypes.DATEONLY, defaultValue: DataTypes.NOW }
+    date: { type: DataTypes.DATEONLY, defaultValue: DataTypes.NOW },
+    transactionId: { type: DataTypes.STRING, allowNull: true } // Captured for UPI
 });
 
 const Plan = sequelize.define('Plan', {
     name: { type: DataTypes.STRING, allowNull: false },
     price: { type: DataTypes.FLOAT, allowNull: false },
     duration: { type: DataTypes.INTEGER, allowNull: false }, // in months
-    description: { type: DataTypes.STRING, allowNull: true }
+    description: { type: DataTypes.STRING, allowNull: true },
+    features: { type: DataTypes.JSON, defaultValue: [] }
+});
+
+const Notification = sequelize.define('Notification', {
+    message: { type: DataTypes.STRING, allowNull: false },
+    type: { type: DataTypes.STRING, defaultValue: 'info' }, // info, warning, success, error
+    role: { type: DataTypes.STRING, allowNull: true }, // Targeted role (e.g., superadmin)
+    facilityId: { type: DataTypes.INTEGER, allowNull: true }, // Targeted facility
+    isRead: { type: DataTypes.BOOLEAN, defaultValue: false },
+    path: { type: DataTypes.STRING, allowNull: true } // Redirection path
 });
 
 // Relationships
-Gym.belongsTo(SubscriptionPlan, { foreignKey: 'subscriptionPlanId' });
-SubscriptionPlan.hasMany(Gym, { foreignKey: 'subscriptionPlanId' });
+Facility.belongsTo(SubscriptionPlan, { foreignKey: 'subscriptionPlanId' });
+SubscriptionPlan.hasMany(Facility, { foreignKey: 'subscriptionPlanId' });
 
-Gym.hasMany(User, { foreignKey: 'gymId' });
-User.belongsTo(Gym, { foreignKey: 'gymId' });
+Facility.belongsTo(FacilityType, { foreignKey: 'facilityTypeId' });
+FacilityType.hasMany(Facility, { foreignKey: 'facilityTypeId' });
 
-Gym.hasMany(Client, { foreignKey: 'gymId' });
-Client.belongsTo(Gym, { foreignKey: 'gymId' });
+Facility.hasMany(User, { foreignKey: 'facilityId' });
+User.belongsTo(Facility, { foreignKey: 'facilityId' });
+
+Facility.hasMany(Client, { foreignKey: 'facilityId' });
+Client.belongsTo(Facility, { foreignKey: 'facilityId' });
 
 User.hasMany(Client, { as: 'addedClients', foreignKey: 'addedBy' });
 Client.belongsTo(User, { as: 'addedByStaff', foreignKey: 'addedBy' });
@@ -118,11 +148,14 @@ Client.belongsTo(User, { as: 'addedByStaff', foreignKey: 'addedBy' });
 Client.hasMany(Payment, { foreignKey: 'clientId' });
 Payment.belongsTo(Client, { foreignKey: 'clientId' });
 
-Gym.hasMany(Payment, { foreignKey: 'gymId' });
-Payment.belongsTo(Gym, { foreignKey: 'gymId' });
+Facility.hasMany(Payment, { foreignKey: 'facilityId' });
+Payment.belongsTo(Facility, { foreignKey: 'facilityId' });
 
-Gym.hasMany(Plan, { foreignKey: 'gymId' });
-Plan.belongsTo(Gym, { foreignKey: 'gymId' });
+User.hasMany(Payment, { as: 'processedPayments', foreignKey: 'processedBy' });
+Payment.belongsTo(User, { as: 'processor', foreignKey: 'processedBy' });
+
+Facility.hasMany(Plan, { foreignKey: 'facilityId' });
+Plan.belongsTo(Facility, { foreignKey: 'facilityId' });
 
 Plan.hasMany(Client, { foreignKey: 'planId' });
 Client.belongsTo(Plan, { foreignKey: 'planId' });
@@ -130,7 +163,7 @@ Client.belongsTo(Plan, { foreignKey: 'planId' });
 Client.hasMany(Attendance, { foreignKey: 'clientId' });
 Attendance.belongsTo(Client, { foreignKey: 'clientId' });
 
-Gym.hasMany(Attendance, { foreignKey: 'gymId' });
-Attendance.belongsTo(Gym, { foreignKey: 'gymId' });
+Facility.hasMany(Attendance, { foreignKey: 'facilityId' });
+Attendance.belongsTo(Facility, { foreignKey: 'facilityId' });
 
-module.exports = { sequelize, User, Gym, Client, Payment, Plan, SubscriptionPlan, Attendance };
+module.exports = { sequelize, User, Facility, Client, Payment, Plan, SubscriptionPlan, Attendance, Notification, FacilityType };

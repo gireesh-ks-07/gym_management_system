@@ -3,6 +3,7 @@ import api from '../api';
 import { Plus, Search, DollarSign, Calendar, CreditCard } from 'lucide-react';
 import RecordPaymentModal from '../components/RecordPaymentModal';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { formatDate } from '../utils/date';
 
 const Payments = () => {
     const [payments, setPayments] = useState([]);
@@ -68,11 +69,10 @@ const Payments = () => {
                     <table className="modern-table">
                         <thead>
                             <tr>
-                                <th style={{ paddingLeft: '2rem' }}>Client Name</th>
+                                <th style={{ paddingLeft: '2rem' }}>Payment Info</th>
                                 <th>Amount</th>
                                 <th>Method</th>
                                 <th>Date</th>
-                                <th>Status</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -80,10 +80,19 @@ const Payments = () => {
                                 <tr key={p.id} style={{ animationDelay: `${index * 0.05}s` }}>
                                     <td style={{ paddingLeft: '2rem' }}>
                                         <div style={{ fontWeight: '600', color: 'var(--text-main)' }}>{p.Client?.name || 'Unknown Client'}</div>
-                                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>ID: #{p.clientId}</div>
+                                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'flex', gap: '0.5rem' }}>
+                                            <span>Pay ID: #{p.id}</span>
+                                            <span>•</span>
+                                            <span>By: {p.processor?.name || 'System'}</span>
+                                        </div>
+                                        {(p.paymentId || p.transactionId) && (
+                                            <div style={{ fontSize: '0.7rem', color: 'var(--accent-purple)', fontWeight: 'bold', marginTop: '0.25rem' }}>
+                                                Payment ID: {p.paymentId || p.transactionId}
+                                            </div>
+                                        )}
                                     </td>
                                     <td>
-                                        <span style={{ fontWeight: '700', color: 'var(--success)', fontSize: '1rem' }}>₹{p.amount}</span>
+                                        <div style={{ fontWeight: '700', color: 'var(--success)', fontSize: '1rem' }}>₹{p.amount}</div>
                                     </td>
                                     <td>
                                         <span className="status-badge" style={{
@@ -99,11 +108,8 @@ const Payments = () => {
                                     <td style={{ color: 'var(--text-secondary)' }}>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                             <Calendar size={14} />
-                                            {new Date(p.date).toLocaleDateString()}
+                                            {formatDate(p.date)}
                                         </div>
-                                    </td>
-                                    <td>
-                                        <span className="status-badge status-active">Completed</span>
                                     </td>
                                 </tr>
                             ))}

@@ -3,7 +3,8 @@ const cors = require('cors');
 const bodyParser = require('body-parser');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
-const { sequelize, User, Gym, Client, Plan, Payment, SubscriptionPlan, Attendance } = require('./models');
+const { sequelize, User, Facility, Client, Plan, Payment, SubscriptionPlan, Attendance, Notification, FacilityType } = require('./models');
+const { Op } = require('sequelize');
 
 const app = express();
 const PORT = 3000;
@@ -12,60 +13,185 @@ const SECRET_KEY = 'supersecretkey'; // Use env variable in production
 app.use(cors());
 app.use(bodyParser.json());
 
+// Logger for all requests
+app.use((req, res, next) => {
+    console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+    next();
+});
+
 // Middleware for auth
 const authenticate = (req, res, next) => {
-    console.log('Authenticating path:', req.path);
     const authHeader = req.headers['authorization'];
-    console.log('Auth Header:', authHeader);
-    const token = authHeader?.split(' ')[1];
-    if (!token) {
-        console.log('No token found');
+    if (!authHeader) {
+        console.log(`[AUTH] No token for ${req.path}`);
         return res.status(401).json({ message: 'No token provided' });
     }
-
-    jwt.verify(token, 'supersecretkey', (err, decoded) => {
+    const token = authHeader.split(' ')[1];
+    jwt.verify(token, SECRET_KEY, (err, user) => {
         if (err) {
-            console.error('JWT Verify Error:', err.message);
-            return res.status(401).json({ message: 'Failed to authenticate token' });
+            console.log(`[AUTH] Invalid token for ${req.path}: ${err.message}`);
+            return res.status(403).json({ message: 'Forbidden' });
         }
-        console.log('Decoded User:', decoded);
-        req.user = decoded;
+        req.user = user;
         next();
     });
 };
 
 const authorize = (roles = []) => {
     return (req, res, next) => {
+        console.log(`[AUTH] Authorizing path ${req.path} for role ${req.user.role}, required: ${roles}`);
         if (!roles.includes(req.user.role)) {
+            console.log(`[AUTH] Authorization FAILED for ${req.user.role} on ${req.path}`);
             return res.status(403).json({ message: 'Forbidden' });
         }
         next();
     };
 };
 
-// Middleware to check Gym Subscription Status
+const formatDisplayDate = (value) => {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }).replace(/ /g, '/');
+};
+
+const parseDateValue = (value) => {
+    if (!value) return null;
+    if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+        const [year, month, day] = value.split('-').map(Number);
+        return new Date(year, month - 1, day);
+    }
+
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const addMonthsClamped = (baseDateValue, monthsToAdd) => {
+    const baseDate = parseDateValue(baseDateValue);
+    if (!baseDate) return null;
+
+    const totalMonths = baseDate.getMonth() + Number(monthsToAdd || 0);
+    const year = baseDate.getFullYear() + Math.floor(totalMonths / 12);
+    const month = ((totalMonths % 12) + 12) % 12;
+    const day = baseDate.getDate();
+    const lastDayOfTargetMonth = new Date(year, month + 1, 0).getDate();
+
+    const result = new Date(baseDate);
+    result.setFullYear(year, month, Math.min(day, lastDayOfTargetMonth));
+    return result;
+};
+
+const calculateClientPlanExpiry = (baseDateValue, monthsToAdd) => {
+    const expiry = addMonthsClamped(baseDateValue, monthsToAdd);
+    if (!expiry) return null;
+    expiry.setDate(expiry.getDate() - 1);
+    return expiry;
+};
+
+const toDateOnlyString = (value) => {
+    const date = parseDateValue(value);
+    if (!date) return null;
+    return date.toISOString().split('T')[0];
+};
+
+const createLimitExceededNotification = async (facility, type, limit, currentCount) => {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    const existingNote = await Notification.findOne({
+        where: {
+            role: 'superadmin',
+            path: '/facilities',
+            createdAt: { [Op.gte]: todayStart },
+            message: {
+                [Op.like]: `%${facility.name}%${type}%limit%`
+            }
+        }
+    });
+
+    if (!existingNote) {
+        await Notification.create({
+            message: `Facility "${facility.name}" exceeded ${type} limit (${currentCount}/${limit}) for its SaaS plan.`,
+            type: 'warning',
+            role: 'superadmin',
+            path: '/facilities'
+        });
+    }
+};
+
+const getFacilityPlanContext = async (facilityId) => {
+    if (!facilityId) return null;
+    return Facility.findByPk(facilityId, { include: [SubscriptionPlan] });
+};
+
+const syncClientPlanStatuses = async (facilityId = null) => {
+    const backfillWhere = { planId: { [Op.ne]: null } };
+
+    if (facilityId) {
+        backfillWhere.facilityId = facilityId;
+    } else {
+        backfillWhere.facilityId = { [Op.ne]: null };
+    }
+
+    const clientsMissingExpiry = await Client.findAll({
+        where: backfillWhere,
+        include: [Plan]
+    });
+
+    for (const client of clientsMissingExpiry) {
+        if (!client.Plan) continue;
+
+        if (!client.billingRenewalDate) {
+            client.billingRenewalDate = toDateOnlyString(client.joiningDate || client.createdAt || new Date());
+        }
+
+        const expiryDate = calculateClientPlanExpiry(client.billingRenewalDate, client.Plan.duration);
+        if (!expiryDate) continue;
+        client.planExpiresAt = expiryDate;
+        client.status = expiryDate < new Date() ? 'payment_due' : 'active';
+        await client.save();
+    }
+
+    const now = new Date();
+    const where = {
+        planId: { [Op.ne]: null },
+        planExpiresAt: { [Op.ne]: null, [Op.lt]: now }
+    };
+
+    if (facilityId) {
+        where.facilityId = facilityId;
+    } else {
+        where.facilityId = { [Op.ne]: null };
+    }
+
+    await Client.update(
+        { status: 'payment_due' },
+        { where }
+    );
+};
+
+// Middleware to check Facility Subscription Status
 const checkSubscriptionStatus = async (req, res, next) => {
     // Superadmin bypasses subscription checks
     if (req.user.role === 'superadmin') return next();
 
-    if (!req.user.gymId) {
-        return res.status(400).json({ message: 'User not associated with a gym' });
+    if (!req.user.facilityId) {
+        return res.status(400).json({ message: 'User not associated with a facility' });
     }
 
     try {
-        const gym = await Gym.findByPk(req.user.gymId);
-        if (!gym) return res.status(404).json({ message: 'Gym not found' });
+        const facility = await Facility.findByPk(req.user.facilityId);
+        if (!facility) return res.status(404).json({ message: 'Facility not found' });
 
         // Auto-expire if date passed
-        if (gym.subscriptionStatus === 'active' && gym.subscriptionExpiresAt && new Date(gym.subscriptionExpiresAt) < new Date()) {
-            gym.subscriptionStatus = 'expired';
-            await gym.save();
+        if (facility.subscriptionStatus === 'active' && facility.subscriptionExpiresAt && new Date(facility.subscriptionExpiresAt) < new Date()) {
+            facility.subscriptionStatus = 'expired';
+            await facility.save();
         }
 
-        if (gym.subscriptionStatus !== 'active') {
+        if (facility.subscriptionStatus !== 'active') {
             return res.status(403).json({
-                message: 'Gym subscription is ' + gym.subscriptionStatus + '. Please contact support.',
-                code: 'SUBSCRIPTION_' + gym.subscriptionStatus.toUpperCase()
+                message: 'Facility subscription is ' + facility.subscriptionStatus + '. Please contact support.',
+                code: 'SUBSCRIPTION_' + facility.subscriptionStatus.toUpperCase()
             });
         }
         next();
@@ -78,11 +204,11 @@ const checkSubscriptionStatus = async (req, res, next) => {
 
 app.post('/api/auth/register', async (req, res) => {
     // Only for initial setup or specific use case. 
-    // In a real app, only Superadmin creates Admins, and Admins create Trainers.
+    // In a real app, only Superadmin creates Admins, and Admins create Staff.
     try {
-        const { name, email, password, role, gymId } = req.body;
+        const { name, email, password, role, facilityId } = req.body;
         const hashedPassword = await bcrypt.hash(password, 10);
-        const user = await User.create({ name, email, password: hashedPassword, role, gymId });
+        const user = await User.create({ name, email, password: hashedPassword, role, facilityId });
         res.json({ message: 'User registered successfully', user });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -98,21 +224,30 @@ app.post('/api/auth/login', async (req, res) => {
         const isValid = await bcrypt.compare(password, user.password);
         if (!isValid) return res.status(401).json({ message: 'Invalid credentials' });
 
-        const token = jwt.sign({ id: user.id, role: user.role, gymId: user.gymId }, SECRET_KEY, { expiresIn: '1d' });
-        res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role, gymId: user.gymId } });
+        const token = jwt.sign({ id: user.id, role: user.role, facilityId: user.facilityId }, SECRET_KEY, { expiresIn: '1d' });
+        res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role, facilityId: user.facilityId } });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
-// --- GYM ROUTES (Superadmin) ---
+// --- FACILITY ROUTES (Superadmin) ---
 
 // --- SUBSCRIPTION PLAN ROUTES (Superadmin) ---
 
 app.post('/api/subscription-plans', authenticate, authorize(['superadmin']), async (req, res) => {
     try {
-        const { name, price, duration, maxMembers, maxTrainers, description } = req.body;
-        const plan = await SubscriptionPlan.create({ name, price, duration, maxMembers, maxTrainers, description });
+        const { name, price, duration, maxMembers, maxStaff, description } = req.body;
+        const plan = await SubscriptionPlan.create({ name, price, duration, maxMembers, maxStaff, description });
+
+        // Add Notification for Super Admin
+        await Notification.create({
+            message: `New SaaS Plan "${name}" has been created.`,
+            type: 'info',
+            role: 'superadmin',
+            path: '/subscription-plans'
+        });
+
         res.json(plan);
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -128,30 +263,129 @@ app.get('/api/subscription-plans', authenticate, async (req, res) => {
     }
 });
 
-// --- GYM MANAGEMENT ROUTES (Superadmin) ---
-
-app.post('/api/gyms', authenticate, authorize(['superadmin']), async (req, res) => {
+app.put('/api/subscription-plans/:id', authenticate, authorize(['superadmin']), async (req, res) => {
     try {
-        const { name, address, adminEmail, adminPassword, adminName, planId } = req.body;
+        const { name, price, duration, maxMembers, maxStaff, description } = req.body;
+        const plan = await SubscriptionPlan.findByPk(req.params.id);
+        if (!plan) return res.status(404).json({ message: 'Plan not found' });
+
+        plan.name = name;
+        plan.price = price;
+        plan.duration = duration;
+        plan.maxMembers = maxMembers;
+        plan.maxStaff = maxStaff;
+        plan.description = description;
+
+        await plan.save();
+        res.json(plan);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.delete('/api/subscription-plans/:id', authenticate, authorize(['superadmin']), async (req, res) => {
+    try {
+        const plan = await SubscriptionPlan.findByPk(req.params.id);
+        if (!plan) return res.status(404).json({ message: 'Plan not found' });
+
+        await plan.destroy();
+        res.json({ message: 'Plan deleted successfully' });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// --- FACILITY TYPE ROUTES (Superadmin) ---
+
+app.post('/api/facility-types', authenticate, authorize(['superadmin']), async (req, res) => {
+    try {
+        const { name, icon, memberFormConfig } = req.body;
+        const type = await FacilityType.create({ name, icon, memberFormConfig });
+        res.json(type);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/facility-types', authenticate, async (req, res) => {
+    try {
+        const types = await FacilityType.findAll();
+        res.json(types);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.put('/api/facility-types/:id', authenticate, authorize(['superadmin']), async (req, res) => {
+    try {
+        const { name, icon, memberFormConfig } = req.body;
+        const type = await FacilityType.findByPk(req.params.id);
+        if (!type) return res.status(404).json({ message: 'Facility type not found' });
+
+        type.name = name;
+        type.icon = icon;
+        type.memberFormConfig = memberFormConfig;
+
+        await type.save();
+        res.json(type);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.delete('/api/facility-types/:id', authenticate, authorize(['superadmin']), async (req, res) => {
+    try {
+        const type = await FacilityType.findByPk(req.params.id, {
+            include: [{ model: Facility, limit: 1 }]
+        });
+        if (!type) return res.status(404).json({ message: 'Facility type not found' });
+
+        if (type.Facilities && type.Facilities.length > 0) {
+            return res.status(400).json({ message: 'Cannot delete this facility type because it is being used by one or more facilities.' });
+        }
+
+        await type.destroy();
+        res.json({ message: 'Facility type deleted successfully' });
+    } catch (error) {
+        console.error('Facility Type Delete Error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// --- FACILITY MANAGEMENT ROUTES (Superadmin) ---
+
+app.post('/api/facilities', authenticate, authorize(['superadmin']), async (req, res) => {
+    try {
+        const { name, type, address, adminEmail, adminPassword, adminName, planId, facilityTypeId } = req.body;
 
         let subscriptionExpiresAt = null;
         if (planId) {
             const plan = await SubscriptionPlan.findByPk(planId);
             if (plan) {
-                const now = new Date();
-                subscriptionExpiresAt = new Date(now.setMonth(now.getMonth() + plan.duration));
+                const expiryDate = addMonthsClamped(new Date(), plan.duration);
+                subscriptionExpiresAt = expiryDate;
             }
         }
 
-        const gym = await Gym.create({
+        const facility = await Facility.create({
             name,
+            type: type || 'gym',
             address,
             subscriptionPlanId: planId || null,
             subscriptionExpiresAt,
-            subscriptionStatus: planId ? 'active' : 'suspended' // Active if plan assigned
+            subscriptionStatus: planId ? 'active' : 'suspended', // Active if plan assigned
+            facilityTypeId: facilityTypeId || null
         });
 
-        // Create initial admin for the gym
+        // Add Notification for Super Admin
+        await Notification.create({
+            message: `New Facility "${name}" has been registered.`,
+            type: 'success',
+            role: 'superadmin',
+            path: '/facilities'
+        });
+
+        // Create initial admin for the facility
         if (adminEmail && adminPassword) {
             const hashedPassword = await bcrypt.hash(adminPassword, 10);
             await User.create({
@@ -159,87 +393,126 @@ app.post('/api/gyms', authenticate, authorize(['superadmin']), async (req, res) 
                 email: adminEmail,
                 password: hashedPassword,
                 role: 'admin',
-                gymId: gym.id
+                facilityId: facility.id
             });
         }
 
-        res.json(gym);
+        res.json(facility);
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
-app.get('/api/gyms', authenticate, authorize(['superadmin']), async (req, res) => {
+app.get('/api/facilities', authenticate, authorize(['superadmin']), async (req, res) => {
     try {
-        const gyms = await Gym.findAll({
+        const facilities = await Facility.findAll({
             include: [
                 { model: User },
-                { model: SubscriptionPlan }
+                { model: SubscriptionPlan },
+                { model: FacilityType }
             ]
         });
 
         // Auto-update expiry status on list view
         const now = new Date();
-        for (const gym of gyms) {
-            if (gym.subscriptionStatus === 'active' && gym.subscriptionExpiresAt && new Date(gym.subscriptionExpiresAt) < now) {
-                gym.subscriptionStatus = 'expired';
-                await gym.save(); // This updates the DB record
-                // Note: 'gym' object in memory might need manual update if we want frontend to see it immediately without re-fetch, 
-                // but usually fine for list.
+        for (const facility of facilities) {
+            if (facility.subscriptionStatus === 'active' && facility.subscriptionExpiresAt && new Date(facility.subscriptionExpiresAt) < now) {
+                facility.subscriptionStatus = 'expired';
+                await facility.save();
             }
         }
 
-        res.json(gyms);
+        const facilitiesWithUserDetails = await Promise.all(
+            facilities.map(async (facility) => {
+                const [adminCount, staffCount, memberCount] = await Promise.all([
+                    User.count({ where: { facilityId: facility.id, role: 'admin' } }),
+                    User.count({ where: { facilityId: facility.id, role: 'staff' } }),
+                    Client.count({ where: { facilityId: facility.id } })
+                ]);
+
+                return {
+                    ...facility.toJSON(),
+                    userDetails: {
+                        totalUsers: adminCount + staffCount,
+                        adminCount,
+                        staffCount,
+                        memberCount
+                    }
+                };
+            })
+        );
+
+        res.json(facilitiesWithUserDetails);
     } catch (error) {
+        console.error('Error fetching facilities:', error);
         res.status(500).json({ error: error.message });
     }
 });
 
-app.post('/api/gyms/:id/assign-plan', authenticate, authorize(['superadmin']), async (req, res) => {
+app.post('/api/facilities/:id/assign-plan', authenticate, authorize(['superadmin']), async (req, res) => {
     try {
         const { planId } = req.body;
-        const gym = await Gym.findByPk(req.params.id);
+        const facility = await Facility.findByPk(req.params.id);
         const plan = await SubscriptionPlan.findByPk(planId);
 
-        if (!gym || !plan) return res.status(404).json({ message: 'Gym or Plan not found' });
+        if (!facility || !plan) return res.status(404).json({ message: 'Facility or Plan not found' });
 
-        const now = new Date();
-        gym.subscriptionPlanId = plan.id;
-        gym.subscriptionStatus = 'active';
-        gym.subscriptionExpiresAt = new Date(now.setMonth(now.getMonth() + plan.duration));
+        facility.subscriptionPlanId = plan.id;
+        facility.subscriptionStatus = 'active';
+        facility.subscriptionExpiresAt = addMonthsClamped(new Date(), plan.duration);
 
-        await gym.save();
-        res.json(gym);
+        await facility.save();
+        res.json(facility);
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
-app.post('/api/gyms/:id/status', authenticate, authorize(['superadmin']), async (req, res) => {
+app.post('/api/facilities/:id/status', authenticate, authorize(['superadmin']), async (req, res) => {
     try {
         const { status } = req.body; // active, suspended
-        const gym = await Gym.findByPk(req.params.id);
-        if (!gym) return res.status(404).json({ message: 'Gym not found' });
+        const facility = await Facility.findByPk(req.params.id);
+        if (!facility) return res.status(404).json({ message: 'Facility not found' });
 
-        gym.subscriptionStatus = status;
-        await gym.save();
-        res.json(gym);
+        facility.subscriptionStatus = status;
+        await facility.save();
+        res.json(facility);
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
-app.post('/api/gyms/:id/subscription-update', authenticate, authorize(['superadmin']), async (req, res) => {
+app.post('/api/facilities/:id/reset-password', authenticate, authorize(['superadmin']), async (req, res) => {
+    try {
+        const { newPassword } = req.body;
+        if (!newPassword || newPassword.length < 6) {
+            return res.status(400).json({ message: 'Password must be at least 6 characters' });
+        }
+
+        const admin = await User.findOne({ where: { facilityId: req.params.id, role: 'admin' } });
+        if (!admin) return res.status(404).json({ message: 'Admin user not found for this facility' });
+
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+        admin.password = hashedPassword;
+        await admin.save();
+
+        res.json({ message: 'Password reset successfully' });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/facilities/:id/subscription-update', authenticate, authorize(['superadmin']), async (req, res) => {
     try {
         const { status, expiresAt } = req.body;
-        const gym = await Gym.findByPk(req.params.id);
-        if (!gym) return res.status(404).json({ message: 'Gym not found' });
+        const facility = await Facility.findByPk(req.params.id);
+        if (!facility) return res.status(404).json({ message: 'Facility not found' });
 
-        if (status) gym.subscriptionStatus = status;
-        if (expiresAt) gym.subscriptionExpiresAt = new Date(expiresAt);
+        if (status) facility.subscriptionStatus = status;
+        if (expiresAt) facility.subscriptionExpiresAt = new Date(expiresAt);
 
-        await gym.save();
-        res.json(gym);
+        await facility.save();
+        res.json(facility);
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -248,69 +521,101 @@ app.post('/api/gyms/:id/subscription-update', authenticate, authorize(['superadm
 // --- SUPER ADMIN DASHBOARD ---
 app.get('/api/superadmin/dashboard', authenticate, authorize(['superadmin']), async (req, res) => {
     try {
-        const totalGyms = await Gym.count();
-        const activeGyms = await Gym.count({ where: { subscriptionStatus: 'active' } });
-        const suspendedGyms = await Gym.count({ where: { subscriptionStatus: 'suspended' } });
-        const expiredGyms = await Gym.count({ where: { subscriptionStatus: 'expired' } });
+        const totalFacilities = await Facility.count();
+        const activeFacilities = await Facility.count({ where: { subscriptionStatus: 'active' } });
+        const suspendedFacilities = await Facility.count({ where: { subscriptionStatus: 'suspended' } });
+        const expiredFacilities = await Facility.count({ where: { subscriptionStatus: 'expired' } });
 
-        // Calculate Total Revenue (Platform) - Assuming only manual recurring revenue via Subscription Plans
-        // For a real SaaS, we'd have a 'PlatformPayment' model. 
-        // For this functional proto, we'll estimate based on assigned plans (not accurate but sufficient functionality for now)
-        // OR better: Just return the gym counts and status for now, as we don't have a Billing/Invoices table for the SAAS itself yet.
-
-        // Let's create a simplified revenue metric: Sum of (Plan Price) for all active gyms
-        const gymsWithPlans = await Gym.findAll({
+        // Calculate Total Revenue (Platform)
+        const facilitiesWithPlans = await Facility.findAll({
             where: { subscriptionStatus: 'active' },
             include: [{ model: SubscriptionPlan }]
         });
 
-        const mrr = gymsWithPlans.reduce((sum, gym) => sum + (gym.SubscriptionPlan ? (gym.SubscriptionPlan.price / gym.SubscriptionPlan.duration) : 0), 0);
+        const mrr = facilitiesWithPlans.reduce((sum, facility) => sum + (facility.SubscriptionPlan ? (facility.SubscriptionPlan.price / facility.SubscriptionPlan.duration) : 0), 0);
 
         // Expiring soon (next 7 days)
         const nextWeek = new Date();
         nextWeek.setDate(nextWeek.getDate() + 7);
         const now = new Date();
 
-        const expiringGyms = await Gym.findAll({
+        const expiringFacilities = await Facility.findAll({
             where: {
                 subscriptionStatus: 'active',
                 subscriptionExpiresAt: {
-                    [sequelize.Op?.between || 'between']: [now, nextWeek] // Check sequelize operator syntax if fails, doing manual filte for simplicity below
+                    [Op.between]: [now, nextWeek]
                 }
             },
             include: [{ model: SubscriptionPlan }]
         });
 
+        // Create notifications for expiring facilities
+        const todayStart = new Date().setHours(0, 0, 0, 0);
+        for (const facility of expiringFacilities) {
+            const existingNote = await Notification.findOne({
+                where: {
+                    message: { [Op.like]: `%${facility.name}% expiring%` },
+                    createdAt: { [Op.gte]: todayStart }
+                }
+            });
+
+            if (!existingNote) {
+                await Notification.create({
+                    message: `Subscription for "${facility.name}" is expiring soon (${formatDisplayDate(facility.subscriptionExpiresAt)}).`,
+                    type: 'warning',
+                    role: 'superadmin',
+                    path: '/facilities'
+                });
+            }
+        }
+
         res.json({
             stats: {
-                totalGyms, activeGyms, suspendedGyms, expiredGyms, mrr
+                totalFacilities, activeFacilities, suspendedFacilities, expiredFacilities, mrr
             },
-            expiringGyms
+            expiringFacilities
         });
     } catch (error) {
-        console.error(error); // Log for debugging
         res.status(500).json({ error: error.message });
     }
 });
 
-// Endpoint for Gym Admin to check their own subscription
-app.get('/api/gym/subscription', authenticate, async (req, res) => {
+// Endpoint for Facility Admin to check their own subscription
+app.get('/api/facility/subscription', authenticate, async (req, res) => {
     try {
-        if (!req.user.gymId) return res.status(400).json({ message: 'No gym associated' });
-        const gym = await Gym.findByPk(req.user.gymId, { include: [SubscriptionPlan] });
-        res.json(gym);
+        if (!req.user.facilityId) return res.status(400).json({ message: 'No facility associated' });
+        const facility = await Facility.findByPk(req.user.facilityId, { include: [SubscriptionPlan, FacilityType] });
+        res.json(facility);
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
-// --- CLIENT ROUTES (Admin, Trainer) ---
+// --- CLIENT ROUTES (Admin, Staff) ---
 
-app.post('/api/clients', authenticate, checkSubscriptionStatus, authorize(['admin', 'trainer']), async (req, res) => {
+app.post('/api/clients', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
     try {
-        const { name, email, phone, height, weight, joiningDate, gender, aadhaar_number, address } = req.body;
-        // Ensure the trainer/admin belongs to a gym
-        if (!req.user.gymId) return res.status(400).json({ message: 'User not associated with a gym' });
+        const { name, email, phone, height, weight, joiningDate, billingRenewalDate, gender, aadhaar_number, address, customFields } = req.body;
+        // Ensure the staff/admin belongs to a facility
+        if (!req.user.facilityId) return res.status(400).json({ message: 'User not associated with a facility' });
+
+        const facility = await getFacilityPlanContext(req.user.facilityId);
+        if (!facility) return res.status(404).json({ message: 'Facility not found' });
+
+        const maxMembers = facility.SubscriptionPlan?.maxMembers;
+        if (maxMembers != null) {
+            const currentMembers = await Client.count({ where: { facilityId: req.user.facilityId } });
+            if (currentMembers >= maxMembers) {
+                await createLimitExceededNotification(facility, 'member', maxMembers, currentMembers + 1);
+                return res.status(403).json({
+                    message: `Member limit reached for your plan (${maxMembers}). Upgrade your plan to add more members.`,
+                    code: 'PLAN_MEMBER_LIMIT_EXCEEDED'
+                });
+            }
+        }
+
+        const normalizedJoiningDate = toDateOnlyString(joiningDate || new Date());
+        const normalizedBillingDate = toDateOnlyString(billingRenewalDate || normalizedJoiningDate || new Date());
 
         const clientData = {
             name,
@@ -318,20 +623,40 @@ app.post('/api/clients', authenticate, checkSubscriptionStatus, authorize(['admi
             phone,
             height: height || null,
             weight: weight || null,
-            joiningDate,
+            joiningDate: normalizedJoiningDate,
+            billingRenewalDate: normalizedBillingDate,
             gender,
             aadhaar_number: aadhaar_number || null,
             address: address || null,
             planId: req.body.planId || null,
-            gymId: req.user.gymId,
-            addedBy: req.user.id
+            facilityId: req.user.facilityId,
+            addedBy: req.user.id,
+            customFields: customFields || {}
         };
-        console.log('Creating client with data:', clientData);
+
+        if (clientData.planId) {
+            const plan = await Plan.findByPk(clientData.planId);
+            if (plan) {
+                const expiryDate = calculateClientPlanExpiry(clientData.billingRenewalDate, plan.duration);
+                if (expiryDate) {
+                    clientData.planExpiresAt = expiryDate;
+                    clientData.status = expiryDate < new Date() ? 'payment_due' : 'active';
+                }
+            }
+        }
 
         const client = await Client.create(clientData);
+
+        // Add Notification for Facility Admin
+        await Notification.create({
+            message: `New member "${name}" has been registered.`,
+            type: 'success',
+            facilityId: req.user.facilityId,
+            path: '/clients'
+        });
+
         res.json(client);
     } catch (error) {
-        console.error('Error creating client:', error);
         res.status(500).json({ error: error.message });
     }
 });
@@ -340,13 +665,41 @@ app.post('/api/clients', authenticate, checkSubscriptionStatus, authorize(['admi
 
 app.post('/api/staff', authenticate, checkSubscriptionStatus, authorize(['admin']), async (req, res) => {
     try {
-        const { name, email, password, role } = req.body; // role should be 'trainer'
-        if (role !== 'trainer') return res.status(400).json({ message: 'Admins create trainers only' });
+        const { name, email, password, role } = req.body;
+        if (role !== 'staff') return res.status(400).json({ message: 'Admins create staff only' });
+
+        const facility = await getFacilityPlanContext(req.user.facilityId);
+        if (!facility) return res.status(404).json({ message: 'Facility not found' });
+
+        const maxStaff = facility.SubscriptionPlan?.maxStaff;
+        if (maxStaff != null) {
+            const currentStaff = await User.count({ where: { facilityId: req.user.facilityId, role: 'staff' } });
+            if (currentStaff >= maxStaff) {
+                await createLimitExceededNotification(facility, 'staff', maxStaff, currentStaff + 1);
+                return res.status(403).json({
+                    message: `Staff limit reached for your plan (${maxStaff}). Upgrade your plan to add more staff.`,
+                    code: 'PLAN_STAFF_LIMIT_EXCEEDED'
+                });
+            }
+        }
 
         const hashedPassword = await bcrypt.hash(password, 10);
         const staff = await User.create({
-            name, email, password: hashedPassword, role, gymId: req.user.gymId
+            name,
+            email,
+            password: hashedPassword,
+            role: 'staff',
+            facilityId: req.user.facilityId
         });
+
+        // Add Notification for Facility Admin
+        await Notification.create({
+            message: `New staff member "${name}" has been added.`,
+            type: 'success',
+            facilityId: req.user.facilityId,
+            path: '/staff'
+        });
+
         res.json(staff);
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -355,23 +708,21 @@ app.post('/api/staff', authenticate, checkSubscriptionStatus, authorize(['admin'
 
 app.get('/api/staff', authenticate, checkSubscriptionStatus, authorize(['admin']), async (req, res) => {
     try {
-        const staff = await User.findAll({ where: { gymId: req.user.gymId, role: 'trainer' } });
+        const staff = await User.findAll({ where: { facilityId: req.user.facilityId, role: 'staff' } });
         res.json(staff);
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
-
-
 // --- PLAN ROUTES (Admin) ---
 
 app.post('/api/plans', authenticate, checkSubscriptionStatus, authorize(['admin']), async (req, res) => {
     try {
-        const { name, price, duration, description } = req.body;
+        const { name, price, duration, description, features } = req.body;
         const plan = await Plan.create({
-            name, price, duration, description,
-            gymId: req.user.gymId
+            name, price, duration, description, features,
+            facilityId: req.user.facilityId
         });
         res.json(plan);
     } catch (error) {
@@ -379,9 +730,29 @@ app.post('/api/plans', authenticate, checkSubscriptionStatus, authorize(['admin'
     }
 });
 
-app.get('/api/plans', authenticate, checkSubscriptionStatus, authorize(['admin', 'trainer', 'superadmin']), async (req, res) => {
+app.put('/api/plans/:id', authenticate, checkSubscriptionStatus, authorize(['admin']), async (req, res) => {
     try {
-        const plans = await Plan.findAll({ where: { gymId: req.user.gymId } });
+        const { name, price, duration, description, features } = req.body;
+        const plan = await Plan.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
+
+        if (!plan) return res.status(404).json({ message: 'Plan not found' });
+
+        plan.name = name;
+        plan.price = price;
+        plan.duration = duration;
+        plan.description = description;
+        plan.features = features;
+
+        await plan.save();
+        res.json(plan);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/plans', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff', 'superadmin']), async (req, res) => {
+    try {
+        const plans = await Plan.findAll({ where: { facilityId: req.user.facilityId } });
         res.json(plans);
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -389,31 +760,43 @@ app.get('/api/plans', authenticate, checkSubscriptionStatus, authorize(['admin',
 });
 
 // --- DASHBOARD ROUTE ---
-app.get('/api/dashboard', authenticate, checkSubscriptionStatus, authorize(['admin', 'trainer', 'superadmin']), async (req, res) => {
+app.get('/api/dashboard', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff', 'superadmin']), async (req, res) => {
     try {
-        const gymId = req.user.gymId;
+        const facilityId = req.user.facilityId;
+        const now = new Date();
+
+        // 0. Auto-update statuses for expired plans
+        await syncClientPlanStatuses(facilityId);
 
         // 1. Total Active Clients
-        const totalClients = await Client.count({ where: { gymId } });
+        const totalClients = await Client.count({ where: { facilityId } });
 
         // 2. Revenue (Total, Monthly)
-        const totalRevenue = await Payment.sum('amount', { where: { gymId } }) || 0;
+        const totalRevenue = await Payment.sum('amount', { where: { facilityId } }) || 0;
 
-        // 3. Active Trainers
-        const activeTrainers = await User.count({ where: { gymId, role: 'trainer' } });
+        // 3. Active Staff
+        const activeStaff = await User.count({ where: { facilityId, role: 'staff' } });
+
+        // 3b. Due Clients
+        const dueClients = await Client.count({ where: { facilityId, status: 'payment_due' } });
+        const expiredClients = await Client.count({
+            where: {
+                facilityId,
+                planExpiresAt: { [Op.lt]: now }
+            }
+        });
 
         // 4. Recent Clients (Last 5)
         const recentClients = await Client.findAll({
-            where: { gymId },
+            where: { facilityId },
             limit: 5,
             order: [['createdAt', 'DESC']],
             include: [{ model: Plan, attributes: ['name'] }]
         });
 
         // 5. Revenue by Month (Last 6 months) for Chart
-        // Simplify: just fetch all payments and aggregate in JS for now to avoid complex SQL on sqlite
         const payments = await Payment.findAll({
-            where: { gymId },
+            where: { facilityId },
             attributes: ['amount', 'date', 'method']
         });
 
@@ -433,7 +816,7 @@ app.get('/api/dashboard', authenticate, checkSubscriptionStatus, authorize(['adm
 
         // 6. Clients by Plan
         const clientsByPlan = await Client.findAll({
-            where: { gymId },
+            where: { facilityId },
             include: [{ model: Plan, attributes: ['name'] }],
             attributes: ['planId']
         });
@@ -450,7 +833,9 @@ app.get('/api/dashboard', authenticate, checkSubscriptionStatus, authorize(['adm
             stats: {
                 totalClients,
                 totalRevenue,
-                activeTrainers
+                activeStaff,
+                dueClients,
+                expiredClients
             },
             recentClients,
             revenueChartData,
@@ -463,71 +848,78 @@ app.get('/api/dashboard', authenticate, checkSubscriptionStatus, authorize(['adm
     }
 });
 
-app.post('/api/payments', authenticate, checkSubscriptionStatus, authorize(['admin', 'trainer']), async (req, res) => {
+app.post('/api/payments', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
     try {
-        const { clientId, amount, method, date } = req.body;
+        const { clientId, amount, method, date, transactionId } = req.body;
         const payment = await Payment.create({
             clientId,
             amount,
             method,
             date,
-            gymId: req.user.gymId
+            transactionId,
+            processedBy: req.user.id,
+            facilityId: req.user.facilityId
         });
 
         // Activate client and set expiry
         const client = await Client.findByPk(clientId, { include: [Plan] });
         if (client) {
+            const normalizedBillingDate = toDateOnlyString(date || new Date());
+            if (normalizedBillingDate) {
+                client.billingRenewalDate = normalizedBillingDate;
+            }
             client.status = 'active';
 
             // Calculate expiry based on plan duration
             if (client.Plan) {
                 const durationMonths = client.Plan.duration;
-                const paymentDate = new Date(date || new Date());
-                const expiryDate = new Date(paymentDate);
-                expiryDate.setMonth(expiryDate.getMonth() + durationMonths);
-                client.planExpiresAt = expiryDate;
+                const expiryDate = calculateClientPlanExpiry(client.billingRenewalDate, durationMonths);
+                if (expiryDate) {
+                    client.planExpiresAt = expiryDate;
+                }
             }
             await client.save();
         }
 
-        res.json(payment);
+        // Fetch the created payment with associations
+        const fullPayment = await Payment.findByPk(payment.id, {
+            include: [
+                { model: Client, attributes: ['name'] },
+                { model: User, as: 'processor', attributes: ['name'] }
+            ]
+        });
+
+        res.json(fullPayment);
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
 // Update GET /api/clients to check expiry
-app.get('/api/clients', authenticate, checkSubscriptionStatus, authorize(['admin', 'trainer', 'superadmin']), async (req, res) => {
+app.get('/api/clients', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff', 'superadmin']), async (req, res) => {
     try {
         let where = {};
         if (req.user.role !== 'superadmin') {
-            where.gymId = req.user.gymId;
+            where.facilityId = req.user.facilityId;
         }
 
-        // Fetch clients
+        await syncClientPlanStatuses(req.user.role === 'superadmin' ? null : req.user.facilityId);
+
         const clients = await Client.findAll({ where, include: [Plan] });
-
-        // Check for expiry and update status if needed
-        const now = new Date();
-        const updatedClients = await Promise.all(clients.map(async (client) => {
-            if (client.status === 'active' && client.planExpiresAt && new Date(client.planExpiresAt) < now) {
-                client.status = 'payment_due';
-                await client.save();
-            }
-            return client;
-        }));
-
-        res.json(updatedClients);
+        res.json(clients);
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
-app.get('/api/payments', authenticate, checkSubscriptionStatus, authorize(['admin', 'trainer']), async (req, res) => {
+app.get('/api/payments', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
     try {
         const payments = await Payment.findAll({
-            where: { gymId: req.user.gymId },
-            include: [{ model: Client, attributes: ['name'] }],
+            where: { facilityId: req.user.facilityId },
+            include: [
+                { model: Client, attributes: ['name'] },
+                { model: User, as: 'processor', attributes: ['name'] }
+            ],
             order: [['date', 'DESC']]
         });
         res.json(payments);
@@ -536,29 +928,47 @@ app.get('/api/payments', authenticate, checkSubscriptionStatus, authorize(['admi
     }
 });
 
-app.get('/api/reports', authenticate, checkSubscriptionStatus, authorize(['admin', 'superadmin']), async (req, res) => {
+app.get('/api/reports', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff', 'superadmin']), async (req, res) => {
     try {
-        const gymId = req.user.gymId;
-        const clientWhere = gymId ? { gymId } : {};
+        const facilityId = req.user.facilityId;
+        const clientWhere = facilityId ? { facilityId } : {};
 
-        // Gender Stats
-        const clients = await Client.findAll({ where: clientWhere });
-        const genderStats = { male: 0, female: 0, other: 0 };
-        clients.forEach(c => {
-            if (genderStats[c.gender] !== undefined) genderStats[c.gender]++;
-        });
+        // Plan Distribution
+        const plans = await Plan.findAll({ where: clientWhere });
+        const planStats = await Promise.all(plans.map(async (plan) => {
+            const count = await Client.count({ where: { ...clientWhere, planId: plan.id } });
+            return { name: plan.name, count };
+        }));
 
         // Payment Stats
-        const updatedWhere = gymId ? { gymId } : {};
-        const payments = await Payment.findAll({ where: updatedWhere });
+        const updatedWhere = facilityId ? { facilityId } : {};
+        const payments = await Payment.findAll({
+            where: updatedWhere,
+            order: [['date', 'DESC']],
+            limit: 10,
+            include: [{ model: Client, attributes: ['name'] }]
+        });
+
+        const allPayments = await Payment.findAll({ where: updatedWhere });
         const revenue = { total: 0, cash: 0, upi: 0 };
-        payments.forEach(p => {
+        allPayments.forEach(p => {
             revenue.total += p.amount;
             if (p.method === 'cash') revenue.cash += p.amount;
             if (p.method === 'upi') revenue.upi += p.amount;
         });
 
-        res.json({ genderStats, revenue });
+        let genderStats = null;
+        if (req.user.role !== 'superadmin') {
+            const clients = await Client.findAll({ where: clientWhere, attributes: ['gender'] });
+            genderStats = { male: 0, female: 0, other: 0 };
+            clients.forEach(c => {
+                if (genderStats[c.gender] !== undefined) {
+                    genderStats[c.gender] += 1;
+                }
+            });
+        }
+
+        res.json({ revenue, planStats, recentPayments: payments, genderStats });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -566,26 +976,26 @@ app.get('/api/reports', authenticate, checkSubscriptionStatus, authorize(['admin
 
 // --- UPDATE & DELETE ROUTES ---
 
-app.put('/api/gyms/:id', authenticate, authorize(['superadmin']), async (req, res) => {
+app.put('/api/facilities/:id', authenticate, authorize(['superadmin']), async (req, res) => {
     try {
         const { name, address } = req.body;
-        const gym = await Gym.findByPk(req.params.id);
-        if (!gym) return res.status(404).json({ message: 'Gym not found' });
+        const facility = await Facility.findByPk(req.params.id);
+        if (!facility) return res.status(404).json({ message: 'Facility not found' });
 
-        gym.name = name;
-        gym.address = address;
-        await gym.save();
-        res.json(gym);
+        facility.name = name;
+        facility.address = address;
+        await facility.save();
+        res.json(facility);
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
-app.get('/api/attendance/today', authenticate, checkSubscriptionStatus, authorize(['admin', 'trainer', 'superadmin']), async (req, res) => {
+app.get('/api/attendance/today', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff', 'superadmin']), async (req, res) => {
     try {
         const today = new Date().toISOString().split('T')[0];
         const where = { date: today };
-        if (req.user.gymId) where.gymId = req.user.gymId;
+        if (req.user.facilityId) where.facilityId = req.user.facilityId;
 
         const attendance = await Attendance.findAll({
             where,
@@ -597,11 +1007,11 @@ app.get('/api/attendance/today', authenticate, checkSubscriptionStatus, authoriz
     }
 });
 
-app.get('/api/attendance/client/:clientId', authenticate, checkSubscriptionStatus, authorize(['admin', 'trainer', 'superadmin']), async (req, res) => {
+app.get('/api/attendance/client/:clientId', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff', 'superadmin']), async (req, res) => {
     try {
         const { clientId } = req.params;
         const where = { clientId };
-        if (req.user.gymId) where.gymId = req.user.gymId;
+        if (req.user.facilityId) where.facilityId = req.user.facilityId;
 
         const attendance = await Attendance.findAll({
             where,
@@ -614,14 +1024,14 @@ app.get('/api/attendance/client/:clientId', authenticate, checkSubscriptionStatu
     }
 });
 
-app.post('/api/attendance', authenticate, checkSubscriptionStatus, authorize(['admin', 'trainer']), async (req, res) => {
+app.post('/api/attendance', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
     try {
         const { clientId, status } = req.body;
         const today = new Date().toISOString().split('T')[0];
 
         // Check if already checked in today
         const existing = await Attendance.findOne({
-            where: { clientId, date: today, gymId: req.user.gymId }
+            where: { clientId, date: today, facilityId: req.user.facilityId }
         });
 
         if (existing) {
@@ -630,7 +1040,7 @@ app.post('/api/attendance', authenticate, checkSubscriptionStatus, authorize(['a
 
         const attendance = await Attendance.create({
             clientId,
-            gymId: req.user.gymId,
+            facilityId: req.user.facilityId,
             date: today,
             status: status || 'present',
             checkInTime: new Date().toLocaleTimeString('en-US', { hour12: false })
@@ -642,21 +1052,21 @@ app.post('/api/attendance', authenticate, checkSubscriptionStatus, authorize(['a
     }
 });
 
-app.delete('/api/gyms/:id', authenticate, authorize(['superadmin']), async (req, res) => {
+app.delete('/api/facilities/:id', authenticate, authorize(['superadmin']), async (req, res) => {
     try {
-        const gym = await Gym.findByPk(req.params.id);
-        if (!gym) return res.status(404).json({ message: 'Gym not found' });
-        await gym.destroy();
-        res.json({ message: 'Gym deleted successfully' });
+        const facility = await Facility.findByPk(req.params.id);
+        if (!facility) return res.status(404).json({ message: 'Facility not found' });
+        await facility.destroy();
+        res.json({ message: 'Facility deleted successfully' });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
-app.put('/api/clients/:id', authenticate, checkSubscriptionStatus, authorize(['admin', 'trainer']), async (req, res) => {
+app.put('/api/clients/:id', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
     try {
-        const { name, email, phone, height, weight, joiningDate, gender, aadhaar_number, address } = req.body;
-        const client = await Client.findOne({ where: { id: req.params.id, gymId: req.user.gymId } });
+        const { name, email, phone, height, weight, joiningDate, billingRenewalDate, gender, aadhaar_number, address, customFields } = req.body;
+        const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
 
         if (!client) return res.status(404).json({ message: 'Client not found' });
 
@@ -665,11 +1075,42 @@ app.put('/api/clients/:id', authenticate, checkSubscriptionStatus, authorize(['a
         client.phone = phone;
         client.height = height;
         client.weight = weight;
-        client.joiningDate = joiningDate;
+        const previousBillingRenewalDate = client.billingRenewalDate || null;
+        if (joiningDate) {
+            client.joiningDate = toDateOnlyString(joiningDate);
+        }
+        if (Object.prototype.hasOwnProperty.call(req.body, 'billingRenewalDate')) {
+            client.billingRenewalDate = toDateOnlyString(billingRenewalDate) || null;
+        }
         client.gender = gender;
         client.aadhaar_number = aadhaar_number;
         client.address = address;
-        if (req.body.planId) client.planId = req.body.planId;
+        client.customFields = customFields || client.customFields;
+        const oldPlanId = client.planId;
+        if (Object.prototype.hasOwnProperty.call(req.body, 'planId')) {
+            client.planId = req.body.planId || null;
+        }
+
+        if (!client.billingRenewalDate) {
+            client.billingRenewalDate = toDateOnlyString(client.joiningDate || new Date());
+        }
+
+        const billingDateChanged = previousBillingRenewalDate !== client.billingRenewalDate;
+        const planChanged = oldPlanId !== client.planId;
+
+        if (client.planId && (planChanged || billingDateChanged)) {
+            const plan = await Plan.findByPk(client.planId);
+            if (plan) {
+                const expiryDate = calculateClientPlanExpiry(client.billingRenewalDate, plan.duration);
+                if (expiryDate) {
+                    client.planExpiresAt = expiryDate;
+                    client.status = expiryDate < new Date() ? 'payment_due' : 'active';
+                }
+            }
+        } else if (!client.planId && planChanged) {
+            client.planExpiresAt = null;
+            client.status = 'inactive';
+        }
         await client.save();
         res.json(client);
     } catch (error) {
@@ -677,9 +1118,9 @@ app.put('/api/clients/:id', authenticate, checkSubscriptionStatus, authorize(['a
     }
 });
 
-app.delete('/api/clients/:id', authenticate, checkSubscriptionStatus, authorize(['admin', 'trainer']), async (req, res) => {
+app.delete('/api/clients/:id', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
     try {
-        const client = await Client.findOne({ where: { id: req.params.id, gymId: req.user.gymId } });
+        const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
         if (!client) return res.status(404).json({ message: 'Client not found' });
         await client.destroy();
         res.json({ message: 'Client deleted successfully' });
@@ -691,7 +1132,7 @@ app.delete('/api/clients/:id', authenticate, checkSubscriptionStatus, authorize(
 app.put('/api/staff/:id', authenticate, checkSubscriptionStatus, authorize(['admin']), async (req, res) => {
     try {
         const { name, email } = req.body;
-        const staff = await User.findOne({ where: { id: req.params.id, gymId: req.user.gymId, role: 'trainer' } });
+        const staff = await User.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId, role: 'staff' } });
 
         if (!staff) return res.status(404).json({ message: 'Staff member not found' });
 
@@ -706,7 +1147,7 @@ app.put('/api/staff/:id', authenticate, checkSubscriptionStatus, authorize(['adm
 
 app.delete('/api/staff/:id', authenticate, checkSubscriptionStatus, authorize(['admin']), async (req, res) => {
     try {
-        const staff = await User.findOne({ where: { id: req.params.id, gymId: req.user.gymId, role: 'trainer' } });
+        const staff = await User.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId, role: 'staff' } });
         if (!staff) return res.status(404).json({ message: 'Staff member not found' });
         await staff.destroy();
         res.json({ message: 'Staff deleted successfully' });
@@ -717,7 +1158,7 @@ app.delete('/api/staff/:id', authenticate, checkSubscriptionStatus, authorize(['
 
 app.delete('/api/plans/:id', authenticate, checkSubscriptionStatus, authorize(['admin']), async (req, res) => {
     try {
-        const plan = await Plan.findOne({ where: { id: req.params.id, gymId: req.user.gymId } });
+        const plan = await Plan.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
         if (!plan) return res.status(404).json({ message: 'Plan not found' });
         await plan.destroy();
         res.json({ message: 'Plan deleted successfully' });
@@ -726,7 +1167,64 @@ app.delete('/api/plans/:id', authenticate, checkSubscriptionStatus, authorize(['
     }
 });
 
+app.get('/api/notifications', authenticate, async (req, res) => {
+    try {
+        const { role, facilityId } = req.user;
+        const where = {};
+        if (role === 'superadmin') {
+            where.role = 'superadmin';
+        } else {
+            where.facilityId = facilityId;
+        }
+
+        const notifications = await Notification.findAll({
+            where,
+            order: [['createdAt', 'DESC']],
+            limit: 20
+        });
+        res.json(notifications);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/notifications/mark-read/:id', authenticate, async (req, res) => {
+    try {
+        const notification = await Notification.findByPk(req.params.id);
+        if (notification) {
+            notification.isRead = true;
+            await notification.save();
+        }
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/notifications/mark-all-read', authenticate, async (req, res) => {
+    try {
+        const { role, facilityId } = req.user;
+        const where = {};
+        if (role === 'superadmin') {
+            where.role = 'superadmin';
+        } else {
+            where.facilityId = facilityId;
+        }
+
+        await Notification.update({ isRead: true }, { where });
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Initialize DB and Start Server
+// Global Error Handler
+app.use((err, req, res, next) => {
+    console.error('Unhandled Error:', err);
+    res.status(500).json({ message: 'Internal Server Error', error: err.message });
+});
+
 sequelize.sync({ alter: true }).then(async () => {
     // Create default superadmin if not exists
     const superadmin = await User.findOne({ where: { role: 'superadmin' } });
@@ -741,8 +1239,19 @@ sequelize.sync({ alter: true }).then(async () => {
         console.log('Superadmin created: super@admin.com / admin123');
     }
 
-    app.listen(PORT, () => {
-        console.log(`Server running on http://localhost:${PORT}`);
+    // Seed some notifications for demo if none exist
+    const noteCount = await Notification.count();
+    if (noteCount === 0) {
+        await Notification.bulkCreate([
+            { message: 'New facility "Power House" has registered on the platform.', type: 'success', role: 'superadmin', path: '/facilities' },
+            { message: 'Facility "Elite Fitness" subscription is expiring within 7 days.', type: 'warning', role: 'superadmin', path: '/facilities' },
+            { message: 'Your monthly revenue report for February is now available.', type: 'info', role: 'superadmin', path: '/reports' }
+        ]);
+        console.log('Initial notifications seeded.');
+    }
+
+    app.listen(PORT, '0.0.0.0', () => {
+        console.log(`Server running on http://0.0.0.0:${PORT}`);
     });
 }).catch(err => {
     console.error('Unable to connect to the database:', err);

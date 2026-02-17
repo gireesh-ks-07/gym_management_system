@@ -2,18 +2,22 @@ import React, { useEffect, useState } from 'react';
 import api from '../api';
 import { Users, AlertTriangle, TrendingUp, CheckCircle, XCircle } from 'lucide-react';
 import { useToast } from '../context/ToastContext';
+import { useNavigate } from 'react-router-dom';
+import { formatDate } from '../utils/date';
 
 const SuperAdminDashboard = () => {
-    const [stats, setStats] = useState({ totalGyms: 0, activeGyms: 0, suspendedGyms: 0, expiredGyms: 0, mrr: 0 });
-    const [expiringGyms, setExpiringGyms] = useState([]);
+    const [stats, setStats] = useState({ totalFacilities: 0, activeFacilities: 0, suspendedFacilities: 0, expiredFacilities: 0, mrr: 0 });
+    const [expiringFacilities, setExpiringFacilities] = useState([]);
     const { addToast } = useToast();
+    const navigate = useNavigate();
 
     useEffect(() => {
         const fetchDashboard = async () => {
             try {
                 const res = await api.get('/superadmin/dashboard');
+                // Ensure we map the response correctly if backend keys changed
                 setStats(res.data.stats);
-                setExpiringGyms(res.data.expiringGyms);
+                setExpiringFacilities(res.data.expiringFacilities || []);
             } catch (err) {
                 console.error(err);
                 addToast('Failed to fetch dashboard data', 'error');
@@ -22,8 +26,18 @@ const SuperAdminDashboard = () => {
         fetchDashboard();
     }, []);
 
-    const StatCard = ({ title, value, icon: Icon, color, subtext }) => (
-        <div className="card stat-card" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+    const StatCard = ({ title, value, icon: Icon, color, subtext, path }) => (
+        <div
+            className="card stat-card"
+            style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '1rem',
+                cursor: path ? 'pointer' : 'default',
+                transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
+            }}
+            onClick={() => path && navigate(path)}
+        >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div>
                     <h3 className="stat-title">{title}</h3>
@@ -47,30 +61,34 @@ const SuperAdminDashboard = () => {
             {/* Stats Grid */}
             <div className="dashboard-grid" style={{ marginBottom: '2rem' }}>
                 <StatCard
-                    title="Total Gyms"
-                    value={stats.totalGyms}
+                    title="Total Facilities"
+                    value={stats.totalFacilities}
                     icon={Users}
                     color="var(--primary)"
+                    path="/facilities"
                 />
                 <StatCard
-                    title="Active Gyms"
-                    value={stats.activeGyms}
+                    title="Active Facilities"
+                    value={stats.activeFacilities}
                     icon={CheckCircle}
                     color="var(--success)"
+                    path="/facilities?status=active"
                 />
                 <StatCard
                     title="Suspended/Expired"
-                    value={stats.suspendedGyms + stats.expiredGyms}
+                    value={stats.suspendedFacilities + stats.expiredFacilities}
                     icon={XCircle}
                     color="var(--danger)"
-                    subtext={`${stats.expiredGyms} Expired`}
+                    subtext={`${stats.expiredFacilities} Expired`}
+                    path="/facilities?status=inactive"
                 />
                 <StatCard
                     title="Recurring Revenue"
                     value={`₹${stats.mrr.toLocaleString()}`}
                     icon={TrendingUp}
-                    color="var(--accent-purple)"
+                    color="var(--success)"
                     subtext="Monthly Recurring Revenue"
+                    path="/reports"
                 />
             </div>
 
@@ -85,18 +103,18 @@ const SuperAdminDashboard = () => {
                     <table className="modern-table">
                         <thead>
                             <tr>
-                                <th style={{ paddingLeft: '2rem' }}>Gym Name</th>
+                                <th style={{ paddingLeft: '2rem' }}>Facility Name</th>
                                 <th>Plan</th>
                                 <th>Expiry Date</th>
                                 <th>Status</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {expiringGyms.map((gym, index) => (
-                                <tr key={gym.id}>
-                                    <td style={{ paddingLeft: '2rem', fontWeight: '500' }}>{gym.name}</td>
-                                    <td>{gym.SubscriptionPlan ? gym.SubscriptionPlan.name : 'N/A'}</td>
-                                    <td style={{ color: 'var(--danger)' }}>{new Date(gym.subscriptionExpiresAt).toLocaleDateString()}</td>
+                            {expiringFacilities.map((facility, index) => (
+                                <tr key={facility.id}>
+                                    <td style={{ paddingLeft: '2rem', fontWeight: '500' }}>{facility.name}</td>
+                                    <td>{facility.SubscriptionPlan ? facility.SubscriptionPlan.name : 'N/A'}</td>
+                                    <td style={{ color: 'var(--danger)' }}>{formatDate(facility.subscriptionExpiresAt)}</td>
                                     <td>
                                         <span className="status-badge" style={{ background: 'rgba(249, 115, 22, 0.1)', color: 'var(--accent-orange)' }}>
                                             Expiring Soon
@@ -104,7 +122,7 @@ const SuperAdminDashboard = () => {
                                     </td>
                                 </tr>
                             ))}
-                            {expiringGyms.length === 0 && (
+                            {expiringFacilities.length === 0 && (
                                 <tr>
                                     <td colSpan="4" style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>
                                         No critical expiries found for the upcoming week.

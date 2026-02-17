@@ -1,8 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { MoreVertical, Edit, Trash2, Calendar } from 'lucide-react';
+import { MoreVertical, Edit, Trash2, Calendar, Key } from 'lucide-react';
 import { createPortal } from 'react-dom';
 
-const ActionMenu = ({ onEdit, onDelete, onHistory, editLabel = 'Edit', deleteLabel = 'Delete', historyLabel = 'Attendance History' }) => {
+const ActionMenu = ({ onEdit, onDelete, onHistory, onPasswordReset, editLabel = 'Edit', deleteLabel = 'Delete', historyLabel = 'Attendance History', passwordResetLabel = 'Reset Password' }) => {
     const [isOpen, setIsOpen] = useState(false);
     const [position, setPosition] = useState({ top: 0, left: 0 });
     const buttonRef = useRef(null);
@@ -69,6 +69,12 @@ const ActionMenu = ({ onEdit, onDelete, onHistory, editLabel = 'Edit', deleteLab
                 <button className="action-menu-item" onClick={() => handleAction(onHistory)}>
                     <Calendar size={16} />
                     <span>{historyLabel}</span>
+                </button>
+            )}
+            {onPasswordReset && (
+                <button className="action-menu-item" onClick={() => handleAction(onPasswordReset)}>
+                    <Key size={16} />
+                    <span>{passwordResetLabel}</span>
                 </button>
             )}
             {onEdit && (

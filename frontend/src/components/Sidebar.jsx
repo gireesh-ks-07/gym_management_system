@@ -1,7 +1,7 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { LayoutDashboard, Users, Dumbbell, LogOut, Settings, Tag, CreditCard, BarChart2 } from 'lucide-react';
+import { LayoutDashboard, Users, Activity, LogOut, Settings, Tag, CreditCard, BarChart2, Building2, Layers, X } from 'lucide-react';
 
 const Sidebar = ({ isOpen, onClose }) => {
     const { user, logout } = useAuth();
@@ -10,26 +10,19 @@ const Sidebar = ({ isOpen, onClose }) => {
     return (
         <div className={`sidebar ${isOpen ? 'open' : ''}`}>
             <div className="sidebar-brand">
-                <div style={{
-                    background: 'linear-gradient(135deg, var(--primary), var(--accent-blue))',
-                    padding: '8px',
-                    borderRadius: '12px',
-                    boxShadow: '0 0 15px var(--primary-glow)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center'
-                }}>
-                    <Dumbbell size={24} color="white" />
+                <div className="brand-icon">
+                    <Activity size={20} color="white" />
                 </div>
-                <span style={{ fontFamily: 'var(--font-display)', letterSpacing: '-0.02em' }}>FitManager</span>
+                <div>
+                    <div className="brand-name">OpsMonks</div>
+                    <div className="brand-caption">AI POWERED SOLUTIONS</div>
+                </div>
 
-                {/* Close button for mobile */}
                 <button
                     onClick={onClose}
-                    style={{ marginLeft: 'auto', background: 'transparent', color: 'var(--text-secondary)' }}
-                    className="md:hidden"
+                    className="sidebar-close-btn"
                 >
-                    <span style={{ fontSize: '1.5rem', lineHeight: 1 }}>&times;</span>
+                    <X size={20} />
                 </button>
             </div>
 
@@ -40,9 +33,9 @@ const Sidebar = ({ isOpen, onClose }) => {
                 </NavLink>
 
                 {role === 'superadmin' && (
-                    <NavLink to="/gyms" onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-                        <Dumbbell size={20} />
-                        <span>Gyms</span>
+                    <NavLink to="/facilities" onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+                        <Building2 size={20} />
+                        <span>Facilities</span>
                     </NavLink>
                 )}
 
@@ -53,7 +46,14 @@ const Sidebar = ({ isOpen, onClose }) => {
                     </NavLink>
                 )}
 
-                {['admin', 'trainer'].includes(role) && (
+                {role === 'superadmin' && (
+                    <NavLink to="/facility-types" onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+                        <Layers size={20} />
+                        <span>Facility Types</span>
+                    </NavLink>
+                )}
+
+                {['admin', 'staff'].includes(role) && (
                     <NavLink to="/clients" onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
                         <Users size={20} />
                         <span>Members</span>
@@ -74,7 +74,7 @@ const Sidebar = ({ isOpen, onClose }) => {
                     </NavLink>
                 )}
 
-                {['admin', 'trainer'].includes(role) && (
+                {['admin', 'staff'].includes(role) && (
                     <NavLink to="/payments" onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
                         <CreditCard size={20} />
                         <span>Payments</span>

@@ -8,3 +8,4 @@ coverage/
 backend/database.sqlite
 backend/.env
 frontend/.env
+mobile_app/

@@ -4,28 +4,25 @@ import { Plus, Search, User, Phone, Ruler, Weight, Calendar, Mail, Filter, Credi
 import { useToast } from '../context/ToastContext';
 import ActionMenu from '../components/ActionMenu';
 import Modal from '../components/Modal';
-import ConfirmationModal from '../components/ConfirmationModal';
 import RecordPaymentModal from '../components/RecordPaymentModal';
 import AttendanceHistoryModal from '../components/AttendanceHistoryModal';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { formatDate } from '../utils/date';
+import { toTitleCase } from '../utils/textCase';
 
 const Clients = () => {
     const [clients, setClients] = useState([]);
-    const { addToast } = useToast();
+    const { addToast, showConfirm } = useToast();
     const [showModal, setShowModal] = useState(false);
     const [isEditMode, setIsEditMode] = useState(false);
     const [currentClientId, setCurrentClientId] = useState(null);
     const [search, setSearch] = useState('');
+    const [statusFilter, setStatusFilter] = useState('all');
+    const [planFilter, setPlanFilter] = useState('all');
     const [plans, setPlans] = useState([]);
+    const [facility, setFacility] = useState(null);
     const [formData, setFormData] = useState({
-        name: '', email: '', phone: '', height: '', weight: '', joiningDate: new Date().toISOString().split('T')[0], gender: 'male', planId: '', aadhaar_number: '', address: ''
-    });
-    const [confirmModal, setConfirmModal] = useState({
-        isOpen: false,
-        title: '',
-        message: '',
-        onConfirm: () => { },
-        isDangerous: false
+        name: '', email: '', phone: '', joiningDate: new Date().toISOString().split('T')[0], billingRenewalDate: new Date().toISOString().split('T')[0], gender: 'male', planId: '', address: '', customFields: {}
     });
 
     const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -34,6 +31,7 @@ const Clients = () => {
 
     const [showHistoryModal, setShowHistoryModal] = useState(false);
     const [selectedClientHistory, setSelectedClientHistory] = useState({ id: null, name: '' });
+    const isTitleCaseCustomType = (type) => ['text', 'textarea'].includes(type);
 
     const location = useLocation();
     const navigate = useNavigate();
@@ -47,6 +45,14 @@ const Clients = () => {
             ]);
             setClients(clientsRes.data);
             setPlans(plansRes.data);
+
+            // Fetch facility config for custom fields
+            try {
+                const facRes = await api.get('/api/facility/subscription');
+                setFacility(facRes.data);
+            } catch (facErr) {
+                console.log('Not a facility user or failed to fetch facility config');
+            }
 
             // Create a map of clientId -> true for quick lookup
             const attendance = {};
@@ -65,18 +71,29 @@ const Clients = () => {
 
     useEffect(() => {
         const queryParams = new URLSearchParams(location.search);
-        if (queryParams.get('action') === 'add') {
-            setIsEditMode(false);
-            setFormData({ name: '', email: '', phone: '', height: '', weight: '', joiningDate: new Date().toISOString().split('T')[0], gender: 'male', planId: '', aadhaar_number: '', address: '' });
-            setShowModal(true);
-            // Clear the query parameter so refreshing doesn't re-open it
+        const action = queryParams.get('action');
+        const status = queryParams.get('status');
+
+        if (action === 'add') {
+            handleAddClick();
             navigate(location.pathname, { replace: true });
+        }
+
+        if (status) {
+            setStatusFilter(status);
         }
     }, [location, navigate]);
 
     const handleAddClick = () => {
+        const memberLimit = facility?.SubscriptionPlan?.maxMembers ?? facility?.subscriptionPlan?.maxMembers ?? null;
+        if (memberLimit !== null && clients.length >= Number(memberLimit)) {
+            addToast(`Exceeded limit: only ${memberLimit} members allowed in current SaaS plan.`, 'error');
+            return;
+        }
+
         setIsEditMode(false);
-        setFormData({ name: '', email: '', phone: '', height: '', weight: '', joiningDate: new Date().toISOString().split('T')[0], gender: 'male', planId: '', aadhaar_number: '', address: '' });
+        const today = new Date().toISOString().split('T')[0];
+        setFormData({ name: '', email: '', phone: '', joiningDate: today, billingRenewalDate: today, gender: 'male', planId: '', address: '', customFields: {} });
         setShowModal(true);
     };
 
@@ -87,13 +104,12 @@ const Clients = () => {
             name: client.name,
             email: client.email || '',
             phone: client.phone,
-            height: client.height,
-            weight: client.weight,
             joiningDate: client.joiningDate || new Date().toISOString().split('T')[0],
+            billingRenewalDate: client.billingRenewalDate || client.joiningDate || new Date().toISOString().split('T')[0],
             gender: client.gender || 'male',
             planId: client.planId || '',
-            aadhaar_number: client.aadhaar_number || '',
-            address: client.address || ''
+            address: client.address || '',
+            customFields: client.customFields || {}
         });
         setShowModal(true);
     };
@@ -109,14 +125,11 @@ const Clients = () => {
     };
 
     const handleDeleteClick = (clientId) => {
-        setConfirmModal({
-            isOpen: true,
-            title: 'Delete Member',
-            message: 'Are you sure you want to delete this member? This action cannot be undone.',
-            onConfirm: () => deleteMember(clientId),
-            isDangerous: true,
-            confirmText: 'Delete'
-        });
+        showConfirm(
+            'Are you sure you want to delete this member? This action cannot be undone.',
+            () => deleteMember(clientId),
+            'Delete Member'
+        );
     };
 
     const handlePaymentClick = (clientId) => {
@@ -162,15 +175,7 @@ const Clients = () => {
             return;
         }
 
-        if (formData.aadhaar_number && !/^\d{12}$/.test(formData.aadhaar_number)) {
-            addToast('Aadhaar number must be 12 digits', 'error');
-            return;
-        }
 
-        if (Number(formData.height) < 0 || Number(formData.weight) < 0) {
-            addToast('Height and weight cannot be negative', 'error');
-            return;
-        }
 
         try {
             if (isEditMode) {
@@ -179,25 +184,31 @@ const Clients = () => {
                 await api.post('/clients', formData);
             }
             setShowModal(false);
-            setFormData({ name: '', email: '', phone: '', height: '', weight: '', joiningDate: new Date().toISOString().split('T')[0], gender: 'male', planId: '', aadhaar_number: '', address: '' });
+            const today = new Date().toISOString().split('T')[0];
+            setFormData({ name: '', email: '', phone: '', joiningDate: today, billingRenewalDate: today, gender: 'male', planId: '', address: '', customFields: {} });
             fetchClients();
             addToast(isEditMode ? 'Client updated successfully' : 'Client added successfully', 'success');
         } catch (err) {
-            addToast(isEditMode ? 'Failed to update client' : 'Failed to add client', 'error');
+            const message = err?.response?.data?.message;
+            addToast(message || (isEditMode ? 'Failed to update client' : 'Failed to add client'), 'error');
         }
     };
 
-    const filteredClients = clients.filter(c =>
-        c.name.toLowerCase().includes(search.toLowerCase()) ||
-        c.phone.includes(search)
-    );
+    const filteredClients = clients.filter(c => {
+        const matchesSearch = c.name.toLowerCase().includes(search.toLowerCase()) || c.phone.includes(search);
+        const matchesStatus = statusFilter === 'all' || c.status === statusFilter;
+        // Check for loose equality because select value is string and planId might be number
+        const matchesPlan = planFilter === 'all' || c.planId == planFilter;
+
+        return matchesSearch && matchesStatus && matchesPlan;
+    });
 
     return (
         <div className="animate-fade-in">
             <div className="page-header" style={{ marginBottom: '2rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <div>
                     <h1 style={{ fontSize: '1.8rem', fontWeight: 'bold' }}>Members</h1>
-                    <p style={{ color: 'var(--text-secondary)' }}>Manage your gym members and their subscriptions</p>
+                    <p style={{ color: 'var(--text-secondary)' }}>Manage your members and their subscriptions</p>
                 </div>
                 <button className="btn btn-primary" onClick={handleAddClick}>
                     <Plus size={18} />
@@ -205,23 +216,60 @@ const Clients = () => {
                 </button>
             </div>
 
-            <div style={{ marginBottom: '2rem', display: 'flex', gap: '1rem' }}>
-                <div className="input-group" style={{ marginBottom: 0, flex: 1, maxWidth: '400px' }}>
-                    <div style={{ position: 'relative' }}>
-                        <Search size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                        <input
+            <div style={{ marginBottom: '2rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <div style={{ display: 'flex', gap: '1rem' }}>
+                    <div className="input-group" style={{ marginBottom: 0, flex: 1, maxWidth: '400px' }}>
+                        <div style={{ position: 'relative' }}>
+                            <Search size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                            <input
+                                className="input-field"
+                                placeholder="Search by name or phone..."
+                                value={search}
+                                onChange={(e) => setSearch(e.target.value)}
+                                style={{ paddingLeft: '2.75rem' }}
+                            />
+                        </div>
+                    </div>
+
+                    {/* Plan Filter Dropdown */}
+                    <div style={{ minWidth: '200px' }}>
+                        <select
                             className="input-field"
-                            placeholder="Search by name or phone..."
-                            value={search}
-                            onChange={(e) => setSearch(e.target.value)}
-                            style={{ paddingLeft: '2.75rem' }}
-                        />
+                            value={planFilter}
+                            onChange={(e) => setPlanFilter(e.target.value)}
+                            style={{ height: '100%', cursor: 'pointer' }}
+                        >
+                            <option value="all">All Plans</option>
+                            {plans.map(p => (
+                                <option key={p.id} value={p.id}>{p.name}</option>
+                            ))}
+                        </select>
                     </div>
                 </div>
-                <button className="btn btn-secondary">
-                    <Filter size={18} />
-                    <span>Filter</span>
-                </button>
+
+                {/* Status Filter Chips */}
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    {['all', 'active', 'payment_due', 'inactive'].map((status) => (
+                        <button
+                            key={status}
+                            onClick={() => setStatusFilter(status)}
+                            style={{
+                                padding: '0.5rem 1rem',
+                                borderRadius: '20px',
+                                border: `1px solid ${statusFilter === status ? 'var(--primary)' : 'var(--border-color)'}`,
+                                background: statusFilter === status ? 'rgba(16, 185, 129, 0.1)' : 'transparent',
+                                color: statusFilter === status ? 'var(--primary)' : 'var(--text-secondary)',
+                                fontSize: '0.85rem',
+                                fontWeight: statusFilter === status ? '600' : '400',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s',
+                                textTransform: 'capitalize'
+                            }}
+                        >
+                            {status === 'all' ? 'All Members' : status.replace('_', ' ')}
+                        </button>
+                    ))}
+                </div>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1.5rem' }}>
@@ -267,16 +315,14 @@ const Clients = () => {
                             </div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
                                 <Calendar size={14} />
-                                <span>{new Date(client.joiningDate).toLocaleDateString()}</span>
+                                <span>{formatDate(client.joiningDate)}</span>
                             </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-                                <Weight size={14} />
-                                <span>{client.weight || '-'} kg</span>
-                            </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-                                <Ruler size={14} />
-                                <span>{client.height || '-'} cm</span>
-                            </div>
+                            {client.customFields && Object.entries(client.customFields).map(([key, value]) => (
+                                <div key={key} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                                    <CheckSquare size={14} />
+                                    <span>{String(value)}</span>
+                                </div>
+                            ))}
                         </div>
 
                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem' }}>
@@ -314,25 +360,17 @@ const Clients = () => {
                 ))}
             </div>
 
-            {filteredClients.length === 0 && (
-                <div style={{ textAlign: 'center', padding: '4rem', color: 'var(--text-muted)' }}>
-                    <User size={48} style={{ opacity: 0.2, marginBottom: '1rem' }} />
-                    <p>No members found matching your search.</p>
-                </div>
-            )}
-
             <Modal
                 isOpen={showModal}
                 onClose={() => setShowModal(false)}
                 title={isEditMode ? 'Edit Member' : 'Add New Member'}
             >
                 <form onSubmit={handleSubmit}>
-                    <div className="input-group">
-                        <label className="input-label">Full Name</label>
-                        <input className="input-field" required value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} placeholder="Ex. John Doe" />
-                    </div>
-
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+                    <div className="form-grid-2-1">
+                        <div className="input-group">
+                            <label className="input-label">Full Name</label>
+                            <input className="input-field" required value={formData.name} onChange={e => setFormData({ ...formData, name: toTitleCase(e.target.value) })} placeholder="Ex. John Doe" />
+                        </div>
                         <div className="input-group">
                             <label className="input-label">Gender</label>
                             <select className="input-field" value={formData.gender} onChange={e => setFormData({ ...formData, gender: e.target.value })}>
@@ -341,6 +379,9 @@ const Clients = () => {
                                 <option value="other">Other</option>
                             </select>
                         </div>
+                    </div>
+
+                    <div className="form-grid">
                         <div className="input-group">
                             <label className="input-label">Plan</label>
                             <select className="input-field" value={formData.planId} onChange={e => setFormData({ ...formData, planId: e.target.value })}>
@@ -349,13 +390,6 @@ const Clients = () => {
                                     <option key={p.id} value={p.id}>{p.name} - ₹{p.price}</option>
                                 ))}
                             </select>
-                        </div>
-                    </div>
-
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-                        <div className="input-group">
-                            <label className="input-label">Email (Optional)</label>
-                            <input className="input-field" type="email" value={formData.email} onChange={e => setFormData({ ...formData, email: e.target.value })} placeholder="john@example.com" />
                         </div>
                         <div className="input-group">
                             <label className="input-label">Phone Number</label>
@@ -374,66 +408,117 @@ const Clients = () => {
                         </div>
                     </div>
 
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
+                    <div className="form-grid">
                         <div className="input-group">
-                            <label className="input-label">Height (cm)</label>
-                            <input className="input-field" type="number" value={formData.height} onChange={e => setFormData({ ...formData, height: e.target.value })} placeholder="175" />
-                        </div>
-                        <div className="input-group">
-                            <label className="input-label">Weight (kg)</label>
-                            <input className="input-field" type="number" value={formData.weight} onChange={e => setFormData({ ...formData, weight: e.target.value })} placeholder="70" />
+                            <label className="input-label">Email (Optional)</label>
+                            <input className="input-field" type="email" value={formData.email} onChange={e => setFormData({ ...formData, email: e.target.value })} placeholder="john@example.com" />
                         </div>
                         <div className="input-group">
                             <label className="input-label">Joined Date</label>
-                            <input className="input-field" type="date" value={formData.joiningDate} onChange={e => setFormData({ ...formData, joiningDate: e.target.value })} />
-                        </div>
-                    </div>
-
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginTop: '1.5rem' }}>
-                        <div className="input-group">
-                            <label className="input-label">Aadhaar Number (Optional)</label>
                             <input
                                 className="input-field"
-                                type="text"
-                                inputMode="numeric"
-                                value={formData.aadhaar_number || ''}
+                                type="date"
+                                value={formData.joiningDate}
                                 onChange={e => {
-                                    const val = e.target.value.replace(/\D/g, '').slice(0, 12);
-                                    setFormData({ ...formData, aadhaar_number: val });
+                                    const nextJoiningDate = e.target.value;
+                                    const shouldSyncBilling = !formData.billingRenewalDate || formData.billingRenewalDate === formData.joiningDate;
+                                    setFormData({
+                                        ...formData,
+                                        joiningDate: nextJoiningDate,
+                                        billingRenewalDate: shouldSyncBilling ? nextJoiningDate : formData.billingRenewalDate
+                                    });
                                 }}
-                                placeholder="12-digit Aadhaar Number"
                             />
                         </div>
                     </div>
 
-                    <div className="input-group" style={{ marginTop: '1rem' }}>
-                        <label className="input-label">Address (Optional)</label>
-                        <textarea
-                            className="input-field"
-                            rows="3"
-                            value={formData.address || ''}
-                            onChange={e => setFormData({ ...formData, address: e.target.value })}
-                            placeholder="Full address"
-                            style={{ resize: 'vertical' }}
-                        />
+                    <div className="form-grid">
+                        <div className="input-group">
+                            <label className="input-label">Billing Renewal Date</label>
+                            <input
+                                className="input-field"
+                                type="date"
+                                value={formData.billingRenewalDate || ''}
+                                onChange={e => setFormData({ ...formData, billingRenewalDate: e.target.value })}
+                            />
+                        </div>
+                        <div className="input-group">
+                            <label className="input-label">Next Expiry (Auto)</label>
+                            <input className="input-field" value="Calculated from Billing Date + Plan" readOnly />
+                        </div>
                     </div>
 
-                    <div style={{ marginTop: '2rem', display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>
+
+
+                    <div className="input-group" style={{ marginTop: '1rem' }}>
+                        <label className="input-label">Address (Optional)</label>
+                            <textarea
+                                className="input-field"
+                                rows="2"
+                                value={formData.address || ''}
+                                onChange={e => setFormData({ ...formData, address: toTitleCase(e.target.value) })}
+                                placeholder="Full address"
+                                style={{ resize: 'vertical' }}
+                            />
+                    </div>
+
+                    {facility?.FacilityType?.memberFormConfig && facility.FacilityType.memberFormConfig.length > 0 && (
+                        <div style={{ marginTop: '1.5rem', padding: '1rem', background: 'rgba(255,255,255,0.02)', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
+                            <h3 style={{ fontSize: '0.8rem', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '1rem', fontWeight: '600' }}>Additional Information</h3>
+                            <div className="form-grid">
+                                {facility.FacilityType.memberFormConfig.map(field => (
+                                    <div
+                                        className={`input-group ${field.type === 'textarea' ? 'form-grid-full' : ''}`}
+                                        key={field.name}
+                                        style={{
+                                            marginBottom: 0,
+                                            display: 'flex', flexDirection: 'column'
+                                        }}
+                                    ><label className="input-label">{field.label} {field.required && <span style={{ color: 'var(--danger)' }}>*</span>}</label>
+                                        {field.type === 'checkbox' ? (
+                                            <div
+                                                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', height: '42px' }}
+                                                onClick={() => setFormData({ ...formData, customFields: { ...formData.customFields, [field.name]: !formData.customFields[field.name] } })}
+                                            >
+                                                {formData.customFields[field.name] ? <CheckSquare color="var(--primary)" size={18} /> : <Square color="var(--text-secondary)" size={18} />}
+                                                <span style={{ fontSize: '0.9rem', color: formData.customFields[field.name] ? 'var(--text-main)' : 'var(--text-secondary)' }}>{field.label}</span>
+                                            </div>
+                                        ) : field.type === 'textarea' ? (
+                                            <textarea
+                                                className="input-field"
+                                                required={field.required}
+                                                rows="3"
+                                                value={formData.customFields[field.name] || ''}
+                                                onChange={e => setFormData({ ...formData, customFields: { ...formData.customFields, [field.name]: toTitleCase(e.target.value) } })}
+                                                placeholder={field.label}
+                                                style={{ resize: 'vertical' }}
+                                            />
+                                        ) : (
+                                            <input
+                                                type={field.type}
+                                                className="input-field"
+                                                required={field.required}
+                                                value={formData.customFields[field.name] || ''}
+                                                onChange={e => {
+                                                    const raw = e.target.value;
+                                                    const normalized = isTitleCaseCustomType(field.type) ? toTitleCase(raw) : raw;
+                                                    setFormData({ ...formData, customFields: { ...formData.customFields, [field.name]: normalized } });
+                                                }}
+                                                placeholder={field.label}
+                                            />
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="form-grid">
                         <button type="button" className="btn btn-secondary" onClick={() => setShowModal(false)}>Cancel</button>
                         <button type="submit" className="btn btn-primary">{isEditMode ? 'Save Changes' : 'Add Member'}</button>
                     </div>
                 </form>
             </Modal>
-
-            <ConfirmationModal
-                isOpen={confirmModal.isOpen}
-                onClose={() => setConfirmModal({ ...confirmModal, isOpen: false })}
-                title={confirmModal.title}
-                message={confirmModal.message}
-                onConfirm={confirmModal.onConfirm}
-                isDangerous={confirmModal.isDangerous}
-                confirmText={confirmModal.confirmText}
-            />
 
             <RecordPaymentModal
                 isOpen={showPaymentModal}
