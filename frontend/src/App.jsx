@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import Sidebar from './components/Sidebar';
 import Navbar from './components/Navbar';
@@ -23,12 +23,22 @@ const Loader = () => (
 );
 
 const ProtectedRoute = ({ children, roles }) => {
-  const { user, loading } = useAuth();
+  const { user, loading, facilitySubscription } = useAuth();
   const [isSidebarOpen, setIsSidebarOpen] = React.useState(false);
+  const location = useLocation();
 
   if (loading) return <Loader />;
   if (!user) return <Navigate to="/login" />;
   if (roles && !roles.includes(user.role)) return <Navigate to="/" />;
+
+  const isRestrictedFacilityUser =
+    ['admin', 'staff'].includes(user.role) &&
+    facilitySubscription &&
+    facilitySubscription.subscriptionStatus !== 'active';
+
+  if (isRestrictedFacilityUser && location.pathname !== '/') {
+    return <Navigate to="/" />;
+  }
 
   return (
     <div className="dashboard-layout">

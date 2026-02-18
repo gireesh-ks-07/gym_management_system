@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import api from '../api';
 import { useToast } from '../context/ToastContext';
+import { useLocation } from 'react-router-dom';
 import {
-    Plus, Search, Edit2, Trash2, Layers, Check, X,
-    ArrowRight, Settings, Activity, Dumbbell, Music, Sword, Heart
+    Plus, Edit2, Trash2, Layers, Activity, Dumbbell, Music, Sword, Heart
 } from 'lucide-react';
 import Modal from '../components/Modal';
 import { toTitleCase } from '../utils/textCase';
@@ -21,6 +21,7 @@ const FacilityTypes = () => {
     });
 
     const { addToast, showConfirm } = useToast();
+    const location = useLocation();
 
     const icons = [
         { name: 'Activity', icon: <Activity size={18} /> },
@@ -45,6 +46,18 @@ const FacilityTypes = () => {
     useEffect(() => {
         fetchTypes();
     }, []);
+
+    const searchText = (new URLSearchParams(location.search).get('q') || '').trim().toLowerCase();
+    const filteredTypes = types.filter((type) => {
+        const haystack = [
+            type.name,
+            type.icon,
+            ...(type.memberFormConfig || []).map((field) => field.label || '')
+        ]
+            .join(' ')
+            .toLowerCase();
+        return !searchText || haystack.includes(searchText);
+    });
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -146,7 +159,7 @@ const FacilityTypes = () => {
                 </div>
             ) : (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1.5rem' }}>
-                    {types.map((type, index) => (
+                    {filteredTypes.map((type, index) => (
                         <div key={type.id} className="card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.25rem', animationDelay: `${index * 0.05}s` }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                                 <div style={{
@@ -187,10 +200,14 @@ const FacilityTypes = () => {
                         </div>
                     ))}
 
-                    {types.length === 0 && (
+                    {filteredTypes.length === 0 && (
                         <div style={{ gridColumn: '1/-1', textAlign: 'center', padding: '4rem', color: 'var(--text-muted)' }}>
                             <Layers size={48} style={{ marginBottom: '1rem', opacity: 0.2 }} />
-                            <p>No facility types defined yet. Create one to get started.</p>
+                            <p>
+                                {searchText
+                                    ? 'No facility types match your search.'
+                                    : 'No facility types defined yet. Create one to get started.'}
+                            </p>
                         </div>
                     )}
                 </div>

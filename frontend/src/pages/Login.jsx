@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { useNavigate } from 'react-router-dom';
-import { Activity, ArrowRight, Lock, Mail } from 'lucide-react';
+import { ArrowRight, Lock, Mail } from 'lucide-react';
 import PasswordInput from '../components/PasswordInput';
 
 const Login = () => {
@@ -54,20 +54,11 @@ const Login = () => {
         }}>
             <div className="card animate-slide-up" style={{ width: '100%', maxWidth: '440px', padding: '2.5rem', border: '1px solid var(--border-color)' }}>
                 <div style={{ textAlign: 'center', marginBottom: '2.5rem' }}>
-                    <div style={{
-                        background: 'var(--primary)',
-                        width: '64px',
-                        height: '64px',
-                        borderRadius: '16px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        margin: '0 auto 1.5rem',
-                    }}>
-                        <Activity size={32} color="white" />
-                    </div>
-                    <h1 style={{ fontSize: '1.75rem', marginBottom: '0.25rem', fontWeight: '900', letterSpacing: '-0.05em' }}>OpsMonks</h1>
-                    <div style={{ fontSize: '0.75rem', fontWeight: '700', color: 'var(--primary)', letterSpacing: '0.1em', marginBottom: '1rem' }}>AI POWERED SOLUTIONS</div>
+                    <img
+                        src="/logo_with_image.svg"
+                        alt="MobileMonks"
+                        style={{ width: '180px', maxWidth: '100%', margin: '0 auto 1.25rem', display: 'block' }}
+                    />
                     <p style={{ color: 'var(--text-secondary)' }}>Sign in to manage your empire</p>
                 </div>
 
@@ -126,6 +117,22 @@ const Login = () => {
 
                 <div style={{ marginTop: '2rem', textAlign: 'center', fontSize: '0.875rem', color: 'var(--text-muted)' }}>
                     <p>Forgot password? <span style={{ color: 'var(--primary)', cursor: 'pointer' }}>Reset it</span></p>
+                </div>
+
+                <div style={{
+                    marginTop: '1.5rem',
+                    paddingTop: '1rem',
+                    borderTop: '1px solid var(--border-color)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '0.6rem',
+                    color: 'var(--text-muted)',
+                    fontSize: '0.8rem',
+                    letterSpacing: '0.04em'
+                }}>
+                    <img src="/mobilemonks-logo.png" alt="MobileMonks" style={{ width: '28px', height: '28px', borderRadius: '999px' }} />
+                    <span>Powered by MobileMonks</span>
                 </div>
             </div>
         </div>

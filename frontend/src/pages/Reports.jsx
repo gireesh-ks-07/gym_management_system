@@ -8,7 +8,9 @@ const Reports = () => {
         revenue: { total: 0, cash: 0, upi: 0 },
         planStats: [],
         recentPayments: [],
-        genderStats: null
+        genderStats: null,
+        blockedFacilities: [],
+        autopayPayments: []
     });
 
     const fetchStats = async () => {
@@ -121,6 +123,36 @@ const Reports = () => {
                         )) : (
                             <p style={{ color: 'var(--text-muted)', textAlign: 'center' }}>No transactions found.</p>
                         )}
+                    </div>
+                </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: '2rem', marginTop: '2rem' }}>
+                <div className="card" style={{ padding: '2rem' }}>
+                    <h3 style={{ fontSize: '1.1rem', fontWeight: '600', marginBottom: '1rem' }}>Blocked Facilities</h3>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                        {stats.blockedFacilities?.length > 0 ? stats.blockedFacilities.map((f) => (
+                            <div key={f.id} style={{ padding: '0.75rem', border: '1px solid var(--border-color)', borderRadius: '8px' }}>
+                                <div style={{ fontWeight: '600' }}>{f.name}</div>
+                                <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                                    {f.SubscriptionPlan?.name || 'No Plan'} • {f.lastAutopayFailureReason || 'AutoPay issue'}
+                                </div>
+                            </div>
+                        )) : <p style={{ color: 'var(--text-muted)' }}>No blocked facilities.</p>}
+                    </div>
+                </div>
+
+                <div className="card" style={{ padding: '2rem' }}>
+                    <h3 style={{ fontSize: '1.1rem', fontWeight: '600', marginBottom: '1rem' }}>AutoPay Events</h3>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', maxHeight: '340px', overflowY: 'auto' }}>
+                        {stats.autopayPayments?.length > 0 ? stats.autopayPayments.map((p) => (
+                            <div key={p.id} style={{ padding: '0.75rem', border: '1px solid var(--border-color)', borderRadius: '8px' }}>
+                                <div style={{ fontWeight: '600' }}>{p.Facility?.name || 'Unknown Facility'} • {p.eventType}</div>
+                                <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                                    {p.amount != null ? `₹${Number(p.amount).toFixed(2)}` : '-'} • {p.status || '-'} • {formatDate(p.paidAt || p.createdAt)}
+                                </div>
+                            </div>
+                        )) : <p style={{ color: 'var(--text-muted)' }}>No AutoPay events found.</p>}
                     </div>
                 </div>
             </div>

@@ -8,6 +8,8 @@ import { formatDate } from '../utils/date';
 const SuperAdminDashboard = () => {
     const [stats, setStats] = useState({ totalFacilities: 0, activeFacilities: 0, suspendedFacilities: 0, expiredFacilities: 0, mrr: 0 });
     const [expiringFacilities, setExpiringFacilities] = useState([]);
+    const [blockedFacilities, setBlockedFacilities] = useState([]);
+    const [autopayPayments, setAutopayPayments] = useState([]);
     const { addToast } = useToast();
     const navigate = useNavigate();
 
@@ -18,6 +20,8 @@ const SuperAdminDashboard = () => {
                 // Ensure we map the response correctly if backend keys changed
                 setStats(res.data.stats);
                 setExpiringFacilities(res.data.expiringFacilities || []);
+                setBlockedFacilities(res.data.blockedFacilities || []);
+                setAutopayPayments(res.data.autopayPayments || []);
             } catch (err) {
                 console.error(err);
                 addToast('Failed to fetch dashboard data', 'error');
@@ -75,7 +79,7 @@ const SuperAdminDashboard = () => {
                     path="/facilities?status=active"
                 />
                 <StatCard
-                    title="Suspended/Expired"
+                    title="Suspended/Blocked"
                     value={stats.suspendedFacilities + stats.expiredFacilities}
                     icon={XCircle}
                     color="var(--danger)"
@@ -90,6 +94,43 @@ const SuperAdminDashboard = () => {
                     subtext="Monthly Recurring Revenue"
                     path="/reports"
                 />
+            </div>
+
+            <div className="card" style={{ padding: '0', overflow: 'hidden', marginBottom: '2rem' }}>
+                <div style={{ padding: '1.5rem', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    <XCircle size={20} color="var(--danger)" />
+                    <h3 style={{ fontSize: '1.1rem', fontWeight: '600' }}>Blocked Facilities (AutoPay Stopped/Failed)</h3>
+                </div>
+
+                <div className="table-wrapper">
+                    <table className="modern-table">
+                        <thead>
+                            <tr>
+                                <th style={{ paddingLeft: '2rem' }}>Facility</th>
+                                <th>Plan</th>
+                                <th>Last Failure</th>
+                                <th>Updated</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {blockedFacilities.map((facility) => (
+                                <tr key={facility.id}>
+                                    <td style={{ paddingLeft: '2rem', fontWeight: '500' }}>{facility.name}</td>
+                                    <td>{facility.SubscriptionPlan ? facility.SubscriptionPlan.name : 'N/A'}</td>
+                                    <td style={{ color: 'var(--danger)' }}>{facility.lastAutopayFailureReason || 'AutoPay issue'}</td>
+                                    <td>{formatDate(facility.updatedAt)}</td>
+                                </tr>
+                            ))}
+                            {blockedFacilities.length === 0 && (
+                                <tr>
+                                    <td colSpan="4" style={{ textAlign: 'center', padding: '2.5rem', color: 'var(--text-muted)' }}>
+                                        No blocked facilities.
+                                    </td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
             </div>
 
             {/* Expiring Subscriptions */}
@@ -126,6 +167,47 @@ const SuperAdminDashboard = () => {
                                 <tr>
                                     <td colSpan="4" style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>
                                         No critical expiries found for the upcoming week.
+                                    </td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div className="card" style={{ padding: '0', overflow: 'hidden', marginTop: '2rem' }}>
+                <div style={{ padding: '1.5rem', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    <TrendingUp size={20} color="var(--primary)" />
+                    <h3 style={{ fontSize: '1.1rem', fontWeight: '600' }}>AutoPay Payment Details (Latest)</h3>
+                </div>
+
+                <div className="table-wrapper">
+                    <table className="modern-table">
+                        <thead>
+                            <tr>
+                                <th style={{ paddingLeft: '2rem' }}>Facility</th>
+                                <th>Event</th>
+                                <th>Amount</th>
+                                <th>Status</th>
+                                <th>Payment ID</th>
+                                <th>Date</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {autopayPayments.map((item) => (
+                                <tr key={item.id}>
+                                    <td style={{ paddingLeft: '2rem', fontWeight: '500' }}>{item.Facility?.name || 'Unknown'}</td>
+                                    <td>{item.eventType}</td>
+                                    <td>{item.amount != null ? `₹${Number(item.amount).toFixed(2)}` : '-'}</td>
+                                    <td>{item.status || '-'}</td>
+                                    <td style={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>{item.razorpayPaymentId || '-'}</td>
+                                    <td>{formatDate(item.paidAt || item.createdAt)}</td>
+                                </tr>
+                            ))}
+                            {autopayPayments.length === 0 && (
+                                <tr>
+                                    <td colSpan="6" style={{ textAlign: 'center', padding: '2.5rem', color: 'var(--text-muted)' }}>
+                                        No AutoPay payment records yet.
                                     </td>
                                 </tr>
                             )}

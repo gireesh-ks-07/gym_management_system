@@ -6,13 +6,33 @@ const AuthContext = createContext();
 export const AuthProvider = ({ children }) => {
     const [user, setUser] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [facilitySubscription, setFacilitySubscription] = useState(null);
+
+    const refreshFacilitySubscription = async (nextUser = null) => {
+        const effectiveUser = nextUser || user;
+        if (!effectiveUser || !['admin', 'staff'].includes(effectiveUser.role)) {
+            setFacilitySubscription(null);
+            return null;
+        }
+
+        try {
+            const response = await api.get('/facility/subscription');
+            setFacilitySubscription(response.data || null);
+            return response.data || null;
+        } catch (error) {
+            setFacilitySubscription(null);
+            return null;
+        }
+    };
 
     useEffect(() => {
         const storedUser = localStorage.getItem('user');
         const token = localStorage.getItem('token');
 
         if (storedUser && token) {
-            setUser(JSON.parse(storedUser));
+            const parsedUser = JSON.parse(storedUser);
+            setUser(parsedUser);
+            refreshFacilitySubscription(parsedUser);
         }
         setLoading(false);
     }, []);
@@ -25,6 +45,7 @@ export const AuthProvider = ({ children }) => {
             localStorage.setItem('token', token);
             localStorage.setItem('user', JSON.stringify(user));
             setUser(user);
+            await refreshFacilitySubscription(user);
             return { success: true };
         } catch (error) {
             return {
@@ -38,10 +59,11 @@ export const AuthProvider = ({ children }) => {
         localStorage.removeItem('token');
         localStorage.removeItem('user');
         setUser(null);
+        setFacilitySubscription(null);
     };
 
     return (
-        <AuthContext.Provider value={{ user, login, logout, loading }}>
+        <AuthContext.Provider value={{ user, login, logout, loading, facilitySubscription, refreshFacilitySubscription }}>
             {children}
         </AuthContext.Provider>
     );

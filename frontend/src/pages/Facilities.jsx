@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import api from '../api';
-import { Plus, MapPin, ShieldCheck, Dumbbell, Users, Calendar, Music, Activity, Sword, Heart, Layers } from 'lucide-react';
+import { Plus, MapPin, ShieldCheck, Dumbbell, Users, Calendar, Music, Activity, Sword, Heart, Layers, Mail } from 'lucide-react';
 import ActionMenu from '../components/ActionMenu';
 import Modal from '../components/Modal';
 import PasswordInput from '../components/PasswordInput';
@@ -56,7 +56,15 @@ const Facilities = () => {
             setIsEditMode(false);
             setFormData({ name: '', address: '', adminEmail: '', adminPassword: '', adminName: '', planId: '', facilityTypeId: '' });
             setShowModal(true);
-            navigate(location.pathname, { replace: true });
+            queryParams.delete('action');
+            const nextSearch = queryParams.toString();
+            navigate(
+                {
+                    pathname: location.pathname,
+                    search: nextSearch ? `?${nextSearch}` : ''
+                },
+                { replace: true }
+            );
         }
     }, [location, navigate]);
 
@@ -107,6 +115,10 @@ const Facilities = () => {
         }
 
         if (!isEditMode) {
+            if (!formData.planId) {
+                addToast('Please select a subscription plan', 'error');
+                return;
+            }
             if (!formData.adminEmail || !formData.adminPassword || !formData.adminName) {
                 addToast('Please fill in all required fields for the initial administrator', 'error');
                 return;
@@ -223,6 +235,47 @@ const Facilities = () => {
         };
     };
 
+    const getFacilityAdminEmail = (facility) => {
+        const adminUser = facility.Users?.find((u) => u.role === 'admin');
+        return adminUser?.email || 'No admin email';
+    };
+
+    const queryParams = new URLSearchParams(location.search);
+    const searchText = (queryParams.get('q') || '').trim().toLowerCase();
+    const statusFilter = (queryParams.get('status') || '').trim().toLowerCase();
+
+    const filteredFacilities = useMemo(() => {
+        return facilities.filter((facility) => {
+            const status = (facility.subscriptionStatus || '').toLowerCase();
+            const planName = facility.SubscriptionPlan?.name || '';
+            const facilityTypeName = facility.FacilityType?.name || '';
+            const adminEmails = (facility.Users || [])
+                .filter((u) => u.role === 'admin' && u.email)
+                .map((u) => u.email)
+                .join(' ');
+            const haystack = [
+                facility.name,
+                facility.address,
+                planName,
+                facilityTypeName,
+                adminEmails,
+                facility.id ? String(facility.id) : '',
+                status
+            ]
+                .join(' ')
+                .toLowerCase();
+
+            const matchesSearch = !searchText || haystack.includes(searchText);
+            const matchesStatus =
+                !statusFilter ||
+                (statusFilter === 'active' && status === 'active') ||
+                (statusFilter === 'inactive' && status !== 'active') ||
+                status === statusFilter;
+
+            return matchesSearch && matchesStatus;
+        });
+    }, [facilities, searchText, statusFilter]);
+
     return (
         <div className="animate-fade-in">
             <div className="page-header" style={{ marginBottom: '2.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -236,19 +289,22 @@ const Facilities = () => {
                 </button>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '2rem' }}>
-                {facilities.map((facility, index) => {
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '1.5rem' }}>
+                {filteredFacilities.map((facility, index) => {
                     const details = getFacilityUserDetails(facility);
+                    const adminEmail = getFacilityAdminEmail(facility);
                     return (
                     <div className="card" key={facility.id} style={{
                         animationDelay: `${index * 0.1}s`,
                         padding: '0',
                         overflow: 'visible',
                         display: 'flex',
-                        flexDirection: 'column'
+                        flexDirection: 'column',
+                        borderRadius: '16px',
+                        boxShadow: '0 10px 30px rgba(0, 0, 0, 0.28)'
                     }}>
                         <div style={{
-                            padding: '1.5rem',
+                            padding: '1.25rem 1.25rem 1rem 1.25rem',
                             background: 'linear-gradient(135deg, rgba(255,255,255,0.05), transparent)',
                             borderBottom: '1px solid var(--border-color)',
                             display: 'flex',
@@ -267,43 +323,51 @@ const Facilities = () => {
                             />
                         </div>
 
-                        <div style={{ padding: '1.5rem', flex: 1 }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                                <h3 style={{ fontSize: '1.25rem', color: 'var(--text-highlight)' }}>{facility.name}</h3>
+                        <div style={{ padding: '1.25rem', flex: 1 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.85rem' }}>
+                                <h3 style={{ fontSize: '1.45rem', color: 'var(--text-highlight)', lineHeight: '1.2', margin: 0 }}>{facility.name}</h3>
                                 <span style={{ fontSize: '0.75rem', padding: '2px 8px', borderRadius: '12px', background: 'var(--bg-card)', border: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}>
                                     {getTypeLabel(facility)}
                                 </span>
                             </div>
 
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
-                                <MapPin size={16} color="var(--accent-orange)" />
-                                {facility.address || 'No address provided'}
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', marginBottom: '0.9rem' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', color: 'var(--text-secondary)', fontSize: '0.88rem', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '0.5rem 0.65rem' }}>
+                                    <MapPin size={15} color="var(--accent-orange)" />
+                                    <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                        {facility.address || 'No address provided'}
+                                    </span>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', color: 'var(--text-secondary)', fontSize: '0.86rem', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '0.5rem 0.65rem' }}>
+                                    <Mail size={15} color="var(--accent-blue)" />
+                                    <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{adminEmail}</span>
+                                </div>
                             </div>
 
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.75rem', background: 'var(--bg-body)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.85rem', background: 'var(--bg-body)', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
                                 <Users size={16} color="var(--accent-blue)" />
-                                <span style={{ fontSize: '0.9rem', color: 'var(--text-main)', fontWeight: '500' }}>
+                                <span style={{ fontSize: '0.95rem', color: 'var(--text-main)', fontWeight: '600' }}>
                                     {details.totalUsers} Users (Admins + Staff)
                                 </span>
                             </div>
-                            <div style={{ marginTop: '0.75rem', display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '0.5rem' }}>
-                                <div style={{ padding: '0.5rem', border: '1px solid var(--border-color)', borderRadius: '8px', textAlign: 'center' }}>
+                            <div style={{ marginTop: '0.8rem', display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '0.5rem' }}>
+                                <div style={{ padding: '0.6rem 0.45rem', border: '1px solid var(--border-color)', borderRadius: '10px', textAlign: 'center', background: 'rgba(255,255,255,0.02)' }}>
                                     <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Admins</div>
-                                    <div style={{ fontSize: '1rem', fontWeight: '600' }}>{details.adminCount}</div>
+                                    <div style={{ fontSize: '1.1rem', fontWeight: '700' }}>{details.adminCount}</div>
                                 </div>
-                                <div style={{ padding: '0.5rem', border: '1px solid var(--border-color)', borderRadius: '8px', textAlign: 'center' }}>
+                                <div style={{ padding: '0.6rem 0.45rem', border: '1px solid var(--border-color)', borderRadius: '10px', textAlign: 'center', background: 'rgba(255,255,255,0.02)' }}>
                                     <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Staff</div>
-                                    <div style={{ fontSize: '1rem', fontWeight: '600' }}>{details.staffCount}</div>
+                                    <div style={{ fontSize: '1.1rem', fontWeight: '700' }}>{details.staffCount}</div>
                                 </div>
-                                <div style={{ padding: '0.5rem', border: '1px solid var(--border-color)', borderRadius: '8px', textAlign: 'center' }}>
+                                <div style={{ padding: '0.6rem 0.45rem', border: '1px solid var(--border-color)', borderRadius: '10px', textAlign: 'center', background: 'rgba(255,255,255,0.02)' }}>
                                     <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Members</div>
-                                    <div style={{ fontSize: '1rem', fontWeight: '600' }}>{details.memberCount}</div>
+                                    <div style={{ fontSize: '1.1rem', fontWeight: '700' }}>{details.memberCount}</div>
                                 </div>
                             </div>
                         </div>
 
                         <div style={{
-                            padding: '1rem 1.5rem',
+                            padding: '1rem 1.25rem',
                             borderTop: '1px solid var(--border-color)',
                             background: 'rgba(0,0,0,0.2)',
                         }}>
@@ -311,11 +375,16 @@ const Facilities = () => {
                                 <ShieldCheck size={14} />
                                 <span>ID: #{facility.id} • Created: {formatDate(facility.createdAt)}</span>
                             </div>
-                            <div style={{ marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div style={{ marginTop: '0.85rem', paddingTop: '0.85rem', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.85rem' }}>
                                 <div style={{ fontSize: '0.8rem' }}>
-                                    <div style={{ color: 'var(--text-secondary)' }}>Status</div>
+                                    <div style={{ color: 'var(--text-secondary)', marginBottom: '0.15rem' }}>Status</div>
                                     <div style={{
-                                        color: facility.subscriptionStatus === 'active' ? 'var(--success)' : 'var(--danger)',
+                                        color:
+                                            facility.subscriptionStatus === 'active'
+                                                ? 'var(--success)'
+                                                : facility.subscriptionStatus === 'pending'
+                                                    ? 'var(--accent-orange)'
+                                                    : 'var(--danger)',
                                         fontWeight: '600', textTransform: 'uppercase', fontSize: '0.75rem'
                                     }}>
                                         {facility.subscriptionStatus}
@@ -326,7 +395,7 @@ const Facilities = () => {
                                         </div>
                                     )}
                                 </div>
-                                <button className="btn btn-secondary" style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }} onClick={() => openSubscriptionModal(facility)}>
+                                <button className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '0.4rem 0.8rem', borderRadius: '999px', fontWeight: '600', whiteSpace: 'nowrap' }} onClick={() => openSubscriptionModal(facility)}>
                                     Manage Subscription
                                 </button>
                             </div>
@@ -336,10 +405,14 @@ const Facilities = () => {
                 })}
             </div>
 
-            {facilities.length === 0 && (
+            {filteredFacilities.length === 0 && (
                 <div style={{ textAlign: 'center', padding: '4rem', color: 'var(--text-muted)' }}>
                     <Dumbbell size={48} style={{ opacity: 0.2, marginBottom: '1rem' }} />
-                    <p>No facilities found. Click "Add New Facility" to get started.</p>
+                    <p>
+                        {searchText || statusFilter
+                            ? 'No facilities match the current search/filter.'
+                            : 'No facilities found. Click "Add New Facility" to get started.'}
+                    </p>
                 </div>
             )}
 
@@ -381,6 +454,7 @@ const Facilities = () => {
                                 <label className="input-label">Subscription Plan</label>
                                 <select
                                     className="input-field"
+                                    required
                                     value={formData.planId}
                                     onChange={e => setFormData({ ...formData, planId: e.target.value })}
                                 >
@@ -477,7 +551,7 @@ const Facilities = () => {
                                     ))}
                                 </select>
                                 <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
-                                    Assigning a plan will automatically set the expiry date based on the plan duration from today.
+                                    Changing a plan will revoke existing AutoPay (if any), reset status to Pending, and require the facility admin to subscribe again.
                                 </p>
                             </div>
                             <div className="form-grid">
@@ -495,8 +569,8 @@ const Facilities = () => {
                                     onChange={e => setManualData({ ...manualData, status: e.target.value })}
                                 >
                                     <option value="active">Active</option>
-                                    <option value="suspended">Suspended</option>
-                                    <option value="expired">Expired</option>
+                                    <option value="pending">Pending</option>
+                                    <option value="blocked">Blocked</option>
                                 </select>
                             </div>
                             <div className="input-group">

@@ -12,13 +12,28 @@ import SuperAdminDashboard from './SuperAdminDashboard';
 
 import { useNavigate } from 'react-router-dom';
 import { formatDate } from '../utils/date';
+import { useToast } from '../context/ToastContext';
+
+const loadRazorpayCheckoutScript = () => {
+    if (window.Razorpay) return Promise.resolve(true);
+    return new Promise((resolve) => {
+        const script = document.createElement('script');
+        script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+        script.async = true;
+        script.onload = () => resolve(true);
+        script.onerror = () => resolve(false);
+        document.body.appendChild(script);
+    });
+};
 
 const Dashboard = () => {
-    const { user } = useAuth();
+    const { user, refreshFacilitySubscription } = useAuth();
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [subscription, setSubscription] = useState(null);
+    const [subscribing, setSubscribing] = useState(false);
     const navigate = useNavigate();
+    const { addToast } = useToast();
 
     if (user?.role === 'superadmin') {
         return <SuperAdminDashboard />;
@@ -27,14 +42,8 @@ const Dashboard = () => {
     useEffect(() => {
         const fetchData = async () => {
             try {
-                // Fetch sub status first or in parallel, but handle independently
                 const subRes = await api.get('/facility/subscription').catch(() => null);
                 setSubscription(subRes?.data || null);
-
-                if (subRes?.data?.subscriptionStatus !== 'active' && user?.role !== 'superadmin') {
-                    // If suspended/expired, don't bother fetching dashboard data or just let it fail silently
-                    // We will block UI anyway
-                }
 
                 const dashboardRes = await api.get('/dashboard');
                 setData(dashboardRes.data);
@@ -47,6 +56,52 @@ const Dashboard = () => {
         fetchData();
     }, []);
 
+    const handleSubscribeNow = async () => {
+        if (subscribing) return;
+        setSubscribing(true);
+        try {
+            const hasCheckoutScript = await loadRazorpayCheckoutScript();
+            if (!hasCheckoutScript) {
+                addToast('Failed to load Razorpay checkout.', 'error');
+                return;
+            }
+
+            const createRes = await api.post('/facility/subscription/create-autopay');
+            const payload = createRes.data;
+
+            const options = {
+                key: payload.keyId,
+                name: payload.facilityName,
+                description: `${payload.planName} (${payload.billingLabel})`,
+                subscription_id: payload.subscriptionId,
+                prefill: payload.prefill || {},
+                theme: { color: '#16a34a' },
+                handler: async (response) => {
+                    try {
+                        await api.post('/facility/subscription/verify-autopay', response);
+                        const latest = await refreshFacilitySubscription();
+                        setSubscription(latest);
+                        addToast('AutoPay activated successfully.', 'success');
+                        window.location.reload();
+                    } catch (err) {
+                        addToast(err.response?.data?.message || 'AutoPay verification failed.', 'error');
+                    }
+                }
+            };
+
+            const rzp = new window.Razorpay(options);
+            rzp.on('payment.failed', (event) => {
+                const reason = event?.error?.description || 'AutoPay authorization failed';
+                addToast(reason, 'error');
+            });
+            rzp.open();
+        } catch (error) {
+            addToast(error.response?.data?.message || 'Failed to start AutoPay flow.', 'error');
+        } finally {
+            setSubscribing(false);
+        }
+    };
+
     if (loading) return (
         <div className="loader-container">
             <div className="loader-icon"></div>
@@ -54,9 +109,11 @@ const Dashboard = () => {
         </div>
     );
 
-    // Blocking View for Expired/Suspended Subscription
+    // Restricted view when AutoPay is not active
     if (subscription && subscription.subscriptionStatus !== 'active' && user?.role !== 'superadmin') {
-        const isExpired = subscription.subscriptionStatus === 'expired';
+        const isPending = subscription.subscriptionStatus === 'pending';
+        const isBlocked = subscription.subscriptionStatus === 'blocked';
+        const canSubscribe = user?.role === 'admin' && subscription?.subscriptionPlanId;
         return (
             <div className="animate-fade-in" style={{
                 height: '80vh',
@@ -71,22 +128,34 @@ const Dashboard = () => {
                     <AlertCircle size={48} />
                 </div>
                 <h1 style={{ fontSize: '2rem', fontWeight: 'bold' }}>
-                    {isExpired ? 'Subscription Expired' : 'Account Suspended'}
+                    {isPending ? 'Subscription Pending' : isBlocked ? 'AutoPay Blocked' : 'Subscription Inactive'}
                 </h1>
                 <p style={{ maxWidth: '500px', color: 'var(--text-secondary)', lineHeight: '1.6' }}>
-                    {isExpired
-                        ? 'Your facility\'s subscription plan has expired. To continue using the platform and accessing your data, please renew your subscription.'
-                        : 'Your account has been suspended by the platform administrator. Please contact support for assistance.'}
+                    {isPending
+                        ? 'Your facility has a plan assigned, but AutoPay is not authorized yet. Click Subscribe Now to activate all modules.'
+                        : 'AutoPay was cancelled or failed. Reactivate AutoPay to restore full access.'}
                 </p>
                 <div style={{ marginTop: '1rem', padding: '1rem', background: 'var(--bg-card)', borderRadius: '12px', border: '1px solid var(--border-color)', minWidth: '300px' }}>
                     <div style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>Current Status</div>
                     <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'var(--danger)', textTransform: 'uppercase' }}>
                         {subscription.subscriptionStatus}
                     </div>
+                    {subscription.SubscriptionPlan && (
+                        <div style={{ marginTop: '0.5rem', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
+                            Plan: {subscription.SubscriptionPlan.name} (₹{subscription.SubscriptionPlan.price}/{subscription.SubscriptionPlan.duration} mo)
+                        </div>
+                    )}
                 </div>
-                <button className="btn btn-primary" style={{ marginTop: '1rem' }} onClick={() => window.location.reload()}>
-                    Check Status Again
-                </button>
+                <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem' }}>
+                    {canSubscribe && (
+                        <button className="btn btn-primary" onClick={handleSubscribeNow} disabled={subscribing}>
+                            {subscribing ? 'Starting...' : 'Subscribe Now'}
+                        </button>
+                    )}
+                    <button className="btn btn-secondary" onClick={() => window.location.reload()}>
+                        Check Status
+                    </button>
+                </div>
             </div>
         );
     }

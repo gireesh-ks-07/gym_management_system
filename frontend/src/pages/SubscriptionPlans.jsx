@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import api from '../api';
 import { Plus, Tag, CheckCircle } from 'lucide-react';
 import { useToast } from '../context/ToastContext';
@@ -39,9 +39,34 @@ const SubscriptionPlans = () => {
             setIsEditMode(false);
             setFormData({ name: '', price: '', duration: '', maxMembers: '', maxStaff: '', description: '' });
             setShowModal(true);
-            navigate(location.pathname, { replace: true });
+            queryParams.delete('action');
+            const nextSearch = queryParams.toString();
+            navigate(
+                {
+                    pathname: location.pathname,
+                    search: nextSearch ? `?${nextSearch}` : ''
+                },
+                { replace: true }
+            );
         }
     }, [location, navigate]);
+
+    const searchText = (new URLSearchParams(location.search).get('q') || '').trim().toLowerCase();
+    const filteredPlans = useMemo(() => {
+        return plans.filter((plan) => {
+            const haystack = [
+                plan.name,
+                plan.description,
+                plan.price != null ? String(plan.price) : '',
+                plan.duration != null ? String(plan.duration) : '',
+                plan.maxMembers != null ? String(plan.maxMembers) : '',
+                plan.maxStaff != null ? String(plan.maxStaff) : ''
+            ]
+                .join(' ')
+                .toLowerCase();
+            return !searchText || haystack.includes(searchText);
+        });
+    }, [plans, searchText]);
 
     const handleEditClick = (plan) => {
         setIsEditMode(true);
@@ -111,7 +136,7 @@ const SubscriptionPlans = () => {
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '2rem' }}>
-                {plans.map((plan, index) => (
+                {filteredPlans.map((plan, index) => (
                     <div className="card" key={plan.id} style={{
                         padding: '2rem',
                         display: 'flex',
@@ -152,6 +177,12 @@ const SubscriptionPlans = () => {
                     </div>
                 ))}
             </div>
+
+            {filteredPlans.length === 0 && (
+                <div style={{ textAlign: 'center', padding: '2rem 0', color: 'var(--text-muted)' }}>
+                    {searchText ? 'No subscription plans match your search.' : 'No subscription plans found.'}
+                </div>
+            )}
 
             <Modal
                 isOpen={showModal}
