@@ -750,11 +750,13 @@ app.get('/api/superadmin/dashboard', authenticate, authorize(['superadmin']), as
             order: [['updatedAt', 'DESC']]
         });
 
-        const autopayPayments = await FacilityAutoPayEvent.findAll({
-            include: [{ model: Facility, attributes: ['id', 'name'] }],
-            order: [['createdAt', 'DESC']],
-            limit: 50
-        });
+        const autopayPayments = FacilityAutoPayEvent
+            ? await FacilityAutoPayEvent.findAll({
+                include: [{ model: Facility, attributes: ['id', 'name'] }],
+                order: [['createdAt', 'DESC']],
+                limit: 50
+            })
+            : [];
 
         // Create notifications for expiring facilities
         const todayStart = new Date().setHours(0, 0, 0, 0);
@@ -1415,12 +1417,14 @@ app.get('/api/reports', authenticate, checkSubscriptionStatus, authorize(['admin
             ? {}
             : { facilityId };
 
-        const autopayPayments = await FacilityAutoPayEvent.findAll({
-            where: autopayEventWhere,
-            include: [{ model: Facility, attributes: ['id', 'name'] }],
-            order: [['createdAt', 'DESC']],
-            limit: 50
-        });
+        const autopayPayments = FacilityAutoPayEvent
+            ? await FacilityAutoPayEvent.findAll({
+                where: autopayEventWhere,
+                include: [{ model: Facility, attributes: ['id', 'name'] }],
+                order: [['createdAt', 'DESC']],
+                limit: 50
+            })
+            : [];
 
         const autopayStats = {
             totalEvents: autopayPayments.length,
