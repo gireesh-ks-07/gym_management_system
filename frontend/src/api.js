@@ -1,12 +1,8 @@
 import axios from 'axios';
 
 const envBaseUrl = import.meta.env.VITE_API_BASE_URL;
-// Default: remote in production, localhost in development.
-const baseURL = envBaseUrl || (
-    import.meta.env.MODE === 'production'
-        ? 'https://facilityapis.mobilemonks.in'
-        : 'http://localhost:3000'
-);
+// Default to production API for all environments unless explicitly overridden.
+const baseURL = envBaseUrl || 'https://facilityapis.mobilemonks.in';
 
 const api = axios.create({
     baseURL,
