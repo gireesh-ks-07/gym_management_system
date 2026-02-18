@@ -3,15 +3,24 @@ const cors = require('cors');
 const bodyParser = require('body-parser');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
-const { sequelize, User, Facility, Client, Plan, Payment, SubscriptionPlan, Attendance, Notification, FacilityType } = require('./models');
+const crypto = require('crypto');
+const { sequelize, User, Facility, Client, Plan, Payment, SubscriptionPlan, Attendance, Notification, FacilityType, FacilityAutoPayEvent } = require('./models');
 const { Op } = require('sequelize');
 
 const app = express();
 const PORT = 3000;
 const SECRET_KEY = 'supersecretkey'; // Use env variable in production
+const RAZORPAY_BASE_URL = 'https://api.razorpay.com/v1';
+const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || '';
+const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || '';
+const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET || '';
 
 app.use(cors());
-app.use(bodyParser.json());
+app.use(bodyParser.json({
+    verify: (req, res, buf) => {
+        req.rawBody = buf?.toString('utf8') || '';
+    }
+}));
 
 // Logger for all requests
 app.use((req, res, next) => {
@@ -123,6 +132,160 @@ const getFacilityPlanContext = async (facilityId) => {
     return Facility.findByPk(facilityId, { include: [SubscriptionPlan] });
 };
 
+const isRazorpayConfigured = () => Boolean(RAZORPAY_KEY_ID && RAZORPAY_KEY_SECRET);
+
+const mapDurationToRazorpayPeriod = (months) => {
+    const normalizedMonths = Math.max(1, Number(months) || 1);
+    if (normalizedMonths % 12 === 0) {
+        return {
+            period: 'yearly',
+            interval: Math.max(1, normalizedMonths / 12),
+            label: normalizedMonths === 12 ? 'Yearly' : `Every ${normalizedMonths / 12} years`
+        };
+    }
+    return {
+        period: 'monthly',
+        interval: normalizedMonths,
+        label: normalizedMonths === 1 ? 'Monthly' : `Every ${normalizedMonths} months`
+    };
+};
+
+const callRazorpayApi = async (path, method = 'GET', payload = null) => {
+    if (!isRazorpayConfigured()) {
+        throw new Error('Razorpay keys are not configured');
+    }
+
+    const auth = Buffer.from(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`).toString('base64');
+    const response = await fetch(`${RAZORPAY_BASE_URL}${path}`, {
+        method,
+        headers: {
+            Authorization: `Basic ${auth}`,
+            'Content-Type': 'application/json'
+        },
+        body: payload ? JSON.stringify(payload) : undefined
+    });
+
+    const text = await response.text();
+    const data = text ? JSON.parse(text) : {};
+
+    if (!response.ok) {
+        const reason = data?.error?.description || data?.error?.reason || response.statusText;
+        throw new Error(`Razorpay API error (${response.status}): ${reason}`);
+    }
+
+    return data;
+};
+
+const revokeFacilityAutoPay = async (facility, reason = 'Plan changed') => {
+    if (!facility.razorpaySubscriptionId) return;
+
+    try {
+        await callRazorpayApi(
+            `/subscriptions/${facility.razorpaySubscriptionId}/cancel`,
+            'POST',
+            { cancel_at_cycle_end: false }
+        );
+    } catch (error) {
+        console.error(`[RAZORPAY] Failed to cancel subscription ${facility.razorpaySubscriptionId}: ${error.message}`);
+    }
+
+    facility.subscriptionStatus = 'pending';
+    facility.subscriptionExpiresAt = null;
+    facility.razorpaySubscriptionStatus = 'cancelled';
+    facility.autopayCancelledAt = new Date();
+    facility.lastAutopayFailureReason = reason;
+    facility.lastAutopayFailureAt = new Date();
+    facility.razorpaySubscriptionId = null;
+    facility.razorpayPlanId = null;
+    facility.autopayAuthorizedAt = null;
+};
+
+const setFacilityBlocked = async (facility, reason = 'AutoPay unavailable', razorpayStatus = 'cancelled') => {
+    facility.subscriptionStatus = 'blocked';
+    facility.subscriptionExpiresAt = null;
+    facility.razorpaySubscriptionStatus = razorpayStatus;
+    facility.autopayCancelledAt = new Date();
+    facility.lastAutopayFailureAt = new Date();
+    facility.lastAutopayFailureReason = reason;
+    await facility.save();
+};
+
+const syncFacilitySubscriptionFromRazorpay = async (facility) => {
+    if (!facility?.razorpaySubscriptionId || !isRazorpayConfigured()) return facility;
+
+    try {
+        const remote = await callRazorpayApi(`/subscriptions/${facility.razorpaySubscriptionId}`);
+        const remoteStatus = remote?.status || null;
+        if (!remoteStatus) return facility;
+        const previousRazorpayStatus = facility.razorpaySubscriptionStatus;
+
+        const successStatuses = new Set(['active', 'authenticated']);
+        const blockedStatuses = new Set(['cancelled', 'halted', 'paused']);
+
+        let changed = false;
+        facility.razorpaySubscriptionStatus = remoteStatus;
+
+        if (successStatuses.has(remoteStatus) && facility.subscriptionStatus !== 'active') {
+            facility.subscriptionStatus = 'active';
+            facility.autopayAuthorizedAt = facility.autopayAuthorizedAt || new Date();
+            facility.autopayCancelledAt = null;
+            facility.lastAutopayFailureAt = null;
+            facility.lastAutopayFailureReason = null;
+            changed = true;
+        } else if (blockedStatuses.has(remoteStatus) && facility.subscriptionStatus !== 'blocked') {
+            facility.subscriptionStatus = 'blocked';
+            facility.subscriptionExpiresAt = null;
+            facility.autopayCancelledAt = new Date();
+            facility.lastAutopayFailureAt = new Date();
+            facility.lastAutopayFailureReason = `Razorpay status: ${remoteStatus}`;
+            changed = true;
+        } else if (previousRazorpayStatus !== remoteStatus) {
+            changed = true;
+        }
+
+        if (changed) {
+            await facility.save();
+        }
+    } catch (error) {
+        console.error(`[RAZORPAY] Subscription sync failed for facility ${facility?.id}: ${error.message}`);
+    }
+
+    return facility;
+};
+
+const parseRazorpayUnixTimestamp = (value) => {
+    if (!value) return null;
+    const numeric = Number(value);
+    if (Number.isNaN(numeric)) return null;
+    return new Date(numeric * 1000);
+};
+
+const logAutoPayEvent = async (facility, eventType, subscriptionEntity = null, paymentEntity = null, rawPayload = null) => {
+    if (!facility) return;
+
+    const paymentId = paymentEntity?.id || null;
+    const subscriptionId = subscriptionEntity?.id || paymentEntity?.subscription_id || facility.razorpaySubscriptionId || null;
+    const exists = paymentId
+        ? await FacilityAutoPayEvent.findOne({ where: { razorpayPaymentId: paymentId, eventType } })
+        : null;
+
+    if (exists) return;
+
+    await FacilityAutoPayEvent.create({
+        facilityId: facility.id,
+        eventType,
+        razorpaySubscriptionId: subscriptionId,
+        razorpayPaymentId: paymentId,
+        amount: paymentEntity?.amount ? Number(paymentEntity.amount) / 100 : null,
+        currency: paymentEntity?.currency || 'INR',
+        status: paymentEntity?.status || subscriptionEntity?.status || null,
+        method: paymentEntity?.method || null,
+        failureReason: paymentEntity?.error_description || paymentEntity?.description || null,
+        paidAt: parseRazorpayUnixTimestamp(paymentEntity?.created_at),
+        payload: rawPayload
+    });
+};
+
 const syncClientPlanStatuses = async (facilityId = null) => {
     const backfillWhere = { planId: { [Op.ne]: null } };
 
@@ -181,16 +344,11 @@ const checkSubscriptionStatus = async (req, res, next) => {
     try {
         const facility = await Facility.findByPk(req.user.facilityId);
         if (!facility) return res.status(404).json({ message: 'Facility not found' });
-
-        // Auto-expire if date passed
-        if (facility.subscriptionStatus === 'active' && facility.subscriptionExpiresAt && new Date(facility.subscriptionExpiresAt) < new Date()) {
-            facility.subscriptionStatus = 'expired';
-            await facility.save();
-        }
+        await syncFacilitySubscriptionFromRazorpay(facility);
 
         if (facility.subscriptionStatus !== 'active') {
             return res.status(403).json({
-                message: 'Facility subscription is ' + facility.subscriptionStatus + '. Please contact support.',
+                message: 'Facility subscription is ' + facility.subscriptionStatus + '. AutoPay activation is required.',
                 code: 'SUBSCRIPTION_' + facility.subscriptionStatus.toUpperCase()
             });
         }
@@ -358,22 +516,20 @@ app.post('/api/facilities', authenticate, authorize(['superadmin']), async (req,
     try {
         const { name, type, address, adminEmail, adminPassword, adminName, planId, facilityTypeId } = req.body;
 
-        let subscriptionExpiresAt = null;
-        if (planId) {
-            const plan = await SubscriptionPlan.findByPk(planId);
-            if (plan) {
-                const expiryDate = addMonthsClamped(new Date(), plan.duration);
-                subscriptionExpiresAt = expiryDate;
-            }
+        if (!planId) {
+            return res.status(400).json({ message: 'Subscription plan is required while creating facility.' });
         }
+
+        const plan = await SubscriptionPlan.findByPk(planId);
+        if (!plan) return res.status(404).json({ message: 'Subscription plan not found' });
 
         const facility = await Facility.create({
             name,
             type: type || 'gym',
             address,
-            subscriptionPlanId: planId || null,
-            subscriptionExpiresAt,
-            subscriptionStatus: planId ? 'active' : 'suspended', // Active if plan assigned
+            subscriptionPlanId: planId,
+            subscriptionExpiresAt: null,
+            subscriptionStatus: 'pending',
             facilityTypeId: facilityTypeId || null
         });
 
@@ -457,11 +613,23 @@ app.post('/api/facilities/:id/assign-plan', authenticate, authorize(['superadmin
 
         if (!facility || !plan) return res.status(404).json({ message: 'Facility or Plan not found' });
 
+        await revokeFacilityAutoPay(facility, 'Subscription plan updated by super admin');
         facility.subscriptionPlanId = plan.id;
-        facility.subscriptionStatus = 'active';
-        facility.subscriptionExpiresAt = addMonthsClamped(new Date(), plan.duration);
-
+        facility.subscriptionStatus = 'pending';
+        facility.subscriptionExpiresAt = null;
+        facility.razorpayPlanId = null;
+        facility.razorpaySubscriptionId = null;
+        facility.razorpaySubscriptionStatus = 'pending_activation';
+        facility.autopayAuthorizedAt = null;
         await facility.save();
+
+        await Notification.create({
+            message: `Facility "${facility.name}" plan changed to "${plan.name}". Re-subscription required.`,
+            type: 'warning',
+            facilityId: facility.id,
+            path: '/'
+        });
+
         res.json(facility);
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -470,11 +638,25 @@ app.post('/api/facilities/:id/assign-plan', authenticate, authorize(['superadmin
 
 app.post('/api/facilities/:id/status', authenticate, authorize(['superadmin']), async (req, res) => {
     try {
-        const { status } = req.body; // active, suspended
+        const { status } = req.body; // active, pending, blocked
         const facility = await Facility.findByPk(req.params.id);
         if (!facility) return res.status(404).json({ message: 'Facility not found' });
 
+        const allowed = ['active', 'pending', 'blocked', 'suspended', 'expired'];
+        if (!allowed.includes(status)) {
+            return res.status(400).json({ message: 'Invalid subscription status' });
+        }
+
+        // If super admin moves facility away from active, revoke current AutoPay
+        // so status doesn't auto-sync back to active from an existing Razorpay subscription.
+        if (status !== 'active' && facility.razorpaySubscriptionId) {
+            await revokeFacilityAutoPay(facility, `Subscription manually set to ${status} by super admin`);
+        }
+
         facility.subscriptionStatus = status;
+        if (status !== 'active') {
+            facility.subscriptionExpiresAt = null;
+        }
         await facility.save();
         res.json(facility);
     } catch (error) {
@@ -508,7 +690,20 @@ app.post('/api/facilities/:id/subscription-update', authenticate, authorize(['su
         const facility = await Facility.findByPk(req.params.id);
         if (!facility) return res.status(404).json({ message: 'Facility not found' });
 
-        if (status) facility.subscriptionStatus = status;
+        if (status) {
+            const allowed = ['active', 'pending', 'blocked', 'suspended', 'expired'];
+            if (!allowed.includes(status)) {
+                return res.status(400).json({ message: 'Invalid subscription status' });
+            }
+
+            if (status !== 'active' && facility.razorpaySubscriptionId) {
+                await revokeFacilityAutoPay(facility, `Subscription manually set to ${status} by super admin`);
+            }
+            facility.subscriptionStatus = status;
+            if (status !== 'active') {
+                facility.subscriptionExpiresAt = null;
+            }
+        }
         if (expiresAt) facility.subscriptionExpiresAt = new Date(expiresAt);
 
         await facility.save();
@@ -523,7 +718,7 @@ app.get('/api/superadmin/dashboard', authenticate, authorize(['superadmin']), as
     try {
         const totalFacilities = await Facility.count();
         const activeFacilities = await Facility.count({ where: { subscriptionStatus: 'active' } });
-        const suspendedFacilities = await Facility.count({ where: { subscriptionStatus: 'suspended' } });
+        const suspendedFacilities = await Facility.count({ where: { subscriptionStatus: { [Op.in]: ['suspended', 'blocked', 'pending'] } } });
         const expiredFacilities = await Facility.count({ where: { subscriptionStatus: 'expired' } });
 
         // Calculate Total Revenue (Platform)
@@ -547,6 +742,18 @@ app.get('/api/superadmin/dashboard', authenticate, authorize(['superadmin']), as
                 }
             },
             include: [{ model: SubscriptionPlan }]
+        });
+
+        const blockedFacilities = await Facility.findAll({
+            where: { subscriptionStatus: 'blocked' },
+            include: [{ model: SubscriptionPlan }],
+            order: [['updatedAt', 'DESC']]
+        });
+
+        const autopayPayments = await FacilityAutoPayEvent.findAll({
+            include: [{ model: Facility, attributes: ['id', 'name'] }],
+            order: [['createdAt', 'DESC']],
+            limit: 50
         });
 
         // Create notifications for expiring facilities
@@ -573,7 +780,9 @@ app.get('/api/superadmin/dashboard', authenticate, authorize(['superadmin']), as
             stats: {
                 totalFacilities, activeFacilities, suspendedFacilities, expiredFacilities, mrr
             },
-            expiringFacilities
+            expiringFacilities,
+            blockedFacilities,
+            autopayPayments
         });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -585,7 +794,232 @@ app.get('/api/facility/subscription', authenticate, async (req, res) => {
     try {
         if (!req.user.facilityId) return res.status(400).json({ message: 'No facility associated' });
         const facility = await Facility.findByPk(req.user.facilityId, { include: [SubscriptionPlan, FacilityType] });
+        if (facility) {
+            await syncFacilitySubscriptionFromRazorpay(facility);
+            await facility.reload({ include: [SubscriptionPlan, FacilityType] });
+        }
         res.json(facility);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/facility/subscription/create-autopay', authenticate, authorize(['admin']), async (req, res) => {
+    try {
+        if (!isRazorpayConfigured()) {
+            return res.status(500).json({ message: 'Razorpay sandbox credentials are missing on server.' });
+        }
+
+        const facility = await Facility.findByPk(req.user.facilityId, { include: [SubscriptionPlan] });
+        if (!facility) return res.status(404).json({ message: 'Facility not found' });
+        if (!facility.subscriptionPlanId || !facility.SubscriptionPlan) {
+            return res.status(400).json({ message: 'No subscription plan assigned to this facility.' });
+        }
+
+        if (facility.subscriptionStatus === 'active') {
+            return res.status(400).json({ message: 'AutoPay already active for this facility.' });
+        }
+
+        if (facility.razorpaySubscriptionId) {
+            await revokeFacilityAutoPay(facility, 'Reinitializing AutoPay setup');
+            await facility.save();
+        }
+
+        const planDef = facility.SubscriptionPlan;
+        const { period, interval, label } = mapDurationToRazorpayPeriod(planDef.duration);
+        const amountInPaise = Math.round(Number(planDef.price || 0) * 100);
+        if (amountInPaise <= 0) {
+            return res.status(400).json({ message: 'Plan price should be greater than zero for AutoPay.' });
+        }
+
+        const razorpayPlan = await callRazorpayApi('/plans', 'POST', {
+            period,
+            interval,
+            item: {
+                name: `${planDef.name} (${label})`,
+                amount: amountInPaise,
+                currency: 'INR',
+                description: `Facility SaaS subscription for ${facility.name}`
+            },
+            notes: {
+                facilityId: String(facility.id),
+                subscriptionPlanId: String(planDef.id)
+            }
+        });
+
+        const razorpaySubscription = await callRazorpayApi('/subscriptions', 'POST', {
+            plan_id: razorpayPlan.id,
+            customer_notify: 1,
+            quantity: 1,
+            total_count: 100,
+            notes: {
+                facilityId: String(facility.id),
+                subscriptionPlanId: String(planDef.id)
+            }
+        });
+
+        facility.razorpayPlanId = razorpayPlan.id;
+        facility.razorpaySubscriptionId = razorpaySubscription.id;
+        facility.razorpaySubscriptionStatus = razorpaySubscription.status || 'created';
+        facility.subscriptionStatus = 'pending';
+        facility.subscriptionExpiresAt = null;
+        facility.autopayAuthorizedAt = null;
+        facility.autopayCancelledAt = null;
+        facility.lastAutopayFailureAt = null;
+        facility.lastAutopayFailureReason = null;
+        await facility.save();
+
+        const adminUser = await User.findByPk(req.user.id);
+
+        res.json({
+            keyId: RAZORPAY_KEY_ID,
+            subscriptionId: razorpaySubscription.id,
+            amount: amountInPaise,
+            currency: 'INR',
+            shortUrl: razorpaySubscription.short_url || null,
+            facilityName: facility.name,
+            planName: planDef.name,
+            billingLabel: label,
+            prefill: {
+                name: adminUser?.name || '',
+                email: adminUser?.email || ''
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/facility/subscription/verify-autopay', authenticate, authorize(['admin']), async (req, res) => {
+    try {
+        const { razorpay_payment_id, razorpay_subscription_id, razorpay_signature } = req.body || {};
+        if (!razorpay_payment_id || !razorpay_subscription_id || !razorpay_signature) {
+            return res.status(400).json({ message: 'Missing Razorpay subscription authorization fields.' });
+        }
+
+        const facility = await Facility.findByPk(req.user.facilityId, { include: [SubscriptionPlan] });
+        if (!facility) return res.status(404).json({ message: 'Facility not found' });
+        if (facility.razorpaySubscriptionId !== razorpay_subscription_id) {
+            return res.status(400).json({ message: 'Subscription mismatch for this facility.' });
+        }
+
+        const expectedSignature = crypto
+            .createHmac('sha256', RAZORPAY_KEY_SECRET)
+            .update(`${razorpay_payment_id}|${razorpay_subscription_id}`)
+            .digest('hex');
+
+        if (expectedSignature !== razorpay_signature) {
+            return res.status(400).json({ message: 'Invalid Razorpay signature.' });
+        }
+
+        let remoteSubscription = await callRazorpayApi(`/subscriptions/${razorpay_subscription_id}`);
+        const successStatuses = ['active', 'authenticated'];
+
+        // Razorpay sandbox can lag and briefly keep status as "created"
+        // right after successful checkout callback/signature.
+        if (!successStatuses.includes(remoteSubscription.status)) {
+            for (let attempt = 0; attempt < 3; attempt++) {
+                await new Promise((resolve) => setTimeout(resolve, 1200));
+                remoteSubscription = await callRazorpayApi(`/subscriptions/${razorpay_subscription_id}`);
+                if (successStatuses.includes(remoteSubscription.status)) {
+                    break;
+                }
+            }
+        }
+
+        const acceptedStatuses = new Set(['active', 'authenticated', 'created']);
+        if (!acceptedStatuses.has(remoteSubscription.status)) {
+            return res.status(400).json({
+                message: `AutoPay authorization incomplete. Current Razorpay status: ${remoteSubscription.status}`
+            });
+        }
+
+        facility.subscriptionStatus = 'active';
+        facility.subscriptionExpiresAt = null;
+        facility.razorpaySubscriptionStatus = remoteSubscription.status;
+        facility.autopayAuthorizedAt = new Date();
+        facility.autopayCancelledAt = null;
+        facility.lastAutopayFailureAt = null;
+        facility.lastAutopayFailureReason = null;
+        await facility.save();
+
+        await Notification.create({
+            message: `AutoPay activated successfully for "${facility.name}".`,
+            type: 'success',
+            role: 'superadmin',
+            path: '/facilities'
+        });
+
+        res.json(facility);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/razorpay/webhook', async (req, res) => {
+    try {
+        if (!RAZORPAY_WEBHOOK_SECRET) {
+            return res.status(500).json({ message: 'Webhook secret not configured' });
+        }
+
+        const receivedSignature = req.headers['x-razorpay-signature'] || '';
+        const expectedSignature = crypto
+            .createHmac('sha256', RAZORPAY_WEBHOOK_SECRET)
+            .update(req.rawBody || '')
+            .digest('hex');
+
+        if (receivedSignature !== expectedSignature) {
+            return res.status(400).json({ message: 'Invalid webhook signature' });
+        }
+
+        const event = req.body?.event;
+        const payload = req.body?.payload || {};
+        const subscriptionEntity = payload?.subscription?.entity || null;
+        const paymentEntity = payload?.payment?.entity || null;
+        const razorpaySubscriptionId = subscriptionEntity?.id || paymentEntity?.subscription_id || null;
+        if (!razorpaySubscriptionId) return res.json({ ok: true });
+
+        const facility = await Facility.findOne({ where: { razorpaySubscriptionId } });
+        if (!facility) return res.json({ ok: true });
+
+        const blockingEvents = new Set(['subscription.cancelled', 'subscription.halted', 'subscription.paused', 'payment.failed']);
+        const successEvents = new Set(['subscription.activated', 'subscription.authenticated', 'subscription.charged', 'subscription.resumed']);
+
+        await logAutoPayEvent(facility, event, subscriptionEntity, paymentEntity, req.body);
+
+        if (blockingEvents.has(event)) {
+            const reason = paymentEntity?.error_description || subscriptionEntity?.status || event;
+            await setFacilityBlocked(facility, reason, subscriptionEntity?.status || 'cancelled');
+
+            await Notification.create({
+                message: `AutoPay issue for "${facility.name}": ${reason}. Facility is now blocked.`,
+                type: 'error',
+                role: 'superadmin',
+                path: '/facilities'
+            });
+
+            await Notification.create({
+                message: `AutoPay failed/stopped (${reason}). Access is blocked until subscription is reactivated.`,
+                type: 'error',
+                facilityId: facility.id,
+                path: '/'
+            });
+        } else if (successEvents.has(event) && facility.subscriptionStatus !== 'active') {
+            facility.subscriptionStatus = 'active';
+            facility.razorpaySubscriptionStatus = subscriptionEntity?.status || 'active';
+            facility.autopayAuthorizedAt = new Date();
+            facility.autopayCancelledAt = null;
+            await facility.save();
+
+            await Notification.create({
+                message: `AutoPay charge/activation successful for "${facility.name}".`,
+                type: 'success',
+                role: 'superadmin',
+                path: '/facilities'
+            });
+        }
+
+        res.json({ ok: true });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -760,7 +1194,7 @@ app.get('/api/plans', authenticate, checkSubscriptionStatus, authorize(['admin',
 });
 
 // --- DASHBOARD ROUTE ---
-app.get('/api/dashboard', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff', 'superadmin']), async (req, res) => {
+app.get('/api/dashboard', authenticate, authorize(['admin', 'staff', 'superadmin']), async (req, res) => {
     try {
         const facilityId = req.user.facilityId;
         const now = new Date();
@@ -968,7 +1402,41 @@ app.get('/api/reports', authenticate, checkSubscriptionStatus, authorize(['admin
             });
         }
 
-        res.json({ revenue, planStats, recentPayments: payments, genderStats });
+        const blockedWhere = req.user.role === 'superadmin'
+            ? { subscriptionStatus: 'blocked' }
+            : { id: facilityId, subscriptionStatus: 'blocked' };
+
+        const blockedFacilities = await Facility.findAll({
+            where: blockedWhere,
+            include: [{ model: SubscriptionPlan }]
+        });
+
+        const autopayEventWhere = req.user.role === 'superadmin'
+            ? {}
+            : { facilityId };
+
+        const autopayPayments = await FacilityAutoPayEvent.findAll({
+            where: autopayEventWhere,
+            include: [{ model: Facility, attributes: ['id', 'name'] }],
+            order: [['createdAt', 'DESC']],
+            limit: 50
+        });
+
+        const autopayStats = {
+            totalEvents: autopayPayments.length,
+            failedEvents: autopayPayments.filter((e) => e.eventType === 'payment.failed').length,
+            chargedEvents: autopayPayments.filter((e) => e.eventType === 'subscription.charged').length
+        };
+
+        res.json({
+            revenue,
+            planStats,
+            recentPayments: payments,
+            genderStats,
+            blockedFacilities,
+            autopayPayments,
+            autopayStats
+        });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
