@@ -902,7 +902,29 @@ app.post('/api/facility/subscription/verify-autopay', authenticate, authorize(['
         const facility = await Facility.findByPk(req.user.facilityId, { include: [SubscriptionPlan] });
         if (!facility) return res.status(404).json({ message: 'Facility not found' });
         if (facility.razorpaySubscriptionId !== razorpay_subscription_id) {
-            return res.status(400).json({ message: 'Subscription mismatch for this facility.' });
+            // Recovery path: if DB has stale subscription ID, verify Razorpay notes and self-heal.
+            let incomingSubscription;
+            try {
+                incomingSubscription = await callRazorpayApi(`/subscriptions/${razorpay_subscription_id}`);
+            } catch (e) {
+                return res.status(400).json({
+                    message: 'Subscription mismatch for this facility.',
+                    details: 'Unable to verify incoming subscription with Razorpay.'
+                });
+            }
+
+            const incomingFacilityId = String(incomingSubscription?.notes?.facilityId || '');
+            if (incomingFacilityId && incomingFacilityId === String(facility.id)) {
+                facility.razorpaySubscriptionId = razorpay_subscription_id;
+                facility.razorpayPlanId = incomingSubscription.plan_id || facility.razorpayPlanId;
+                await facility.save();
+            } else {
+                return res.status(400).json({
+                    message: 'Subscription mismatch for this facility.',
+                    expectedSubscriptionId: facility.razorpaySubscriptionId || null,
+                    receivedSubscriptionId: razorpay_subscription_id
+                });
+            }
         }
 
         const expectedSignature = crypto
