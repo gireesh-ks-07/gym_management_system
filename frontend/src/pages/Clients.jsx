@@ -35,6 +35,7 @@ const Clients = () => {
 
     const location = useLocation();
     const navigate = useNavigate();
+    const triggerDashboardRefresh = () => window.dispatchEvent(new Event('dashboard:refresh'));
 
     const fetchClients = async () => {
         try {
@@ -119,6 +120,7 @@ const Clients = () => {
             await api.delete(`/clients/${clientId}`);
             addToast('Member deleted successfully', 'success');
             fetchClients();
+            triggerDashboardRefresh();
         } catch (err) {
             addToast('Failed to delete member', 'error');
         }
@@ -187,6 +189,7 @@ const Clients = () => {
             const today = new Date().toISOString().split('T')[0];
             setFormData({ name: '', email: '', phone: '', joiningDate: today, billingRenewalDate: today, gender: 'male', planId: '', address: '', customFields: {} });
             fetchClients();
+            triggerDashboardRefresh();
             addToast(isEditMode ? 'Client updated successfully' : 'Client added successfully', 'success');
         } catch (err) {
             const message = err?.response?.data?.message;
@@ -333,7 +336,7 @@ const Clients = () => {
                                 disabled={attendanceMap[client.id]}
                             >
                                 {attendanceMap[client.id] ? <CheckSquare size={16} /> : <Square size={16} />}
-                                {attendanceMap[client.id] ? 'Present' : 'Mark Present'}
+                                {attendanceMap[client.id] ? 'Checked' : 'Check-in'}
                             </button>
                             <button
                                 className="btn btn-primary"
@@ -525,7 +528,10 @@ const Clients = () => {
                 onClose={() => setShowPaymentModal(false)}
                 clients={clients}
                 preSelectedClientId={selectedClientForPayment}
-                onSuccess={fetchClients}
+                onSuccess={() => {
+                    fetchClients();
+                    triggerDashboardRefresh();
+                }}
             />
 
             <AttendanceHistoryModal

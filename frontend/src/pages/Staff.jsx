@@ -20,6 +20,7 @@ const Staff = () => {
 
     const location = useLocation();
     const navigate = useNavigate();
+    const triggerDashboardRefresh = () => window.dispatchEvent(new Event('dashboard:refresh'));
 
     const fetchStaff = async () => {
         try {
@@ -71,6 +72,7 @@ const Staff = () => {
             await api.delete(`/staff/${staffId}`);
             addToast('Staff member deleted successfully', 'success');
             fetchStaff();
+            triggerDashboardRefresh();
         } catch (err) {
             addToast('Failed to delete staff member', 'error');
         }
@@ -118,6 +120,7 @@ const Staff = () => {
             setShowModal(false);
             setFormData({ name: '', email: '', password: '', role: 'staff', phone: '' });
             fetchStaff();
+            triggerDashboardRefresh();
         } catch (err) {
             const message = err?.response?.data?.message;
             addToast(message || (isEditMode ? 'Failed to update staff' : 'Failed to add staff'), 'error');

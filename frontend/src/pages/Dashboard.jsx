@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import api from '../api';
 import {
     Users, Wallet, Dumbbell, TrendingUp, Calendar, Activity, AlertCircle, Wifi
@@ -35,26 +35,36 @@ const Dashboard = () => {
     const navigate = useNavigate();
     const { addToast } = useToast();
 
+    const fetchData = useCallback(async () => {
+        try {
+            const subRes = await api.get('/facility/subscription').catch(() => null);
+            setSubscription(subRes?.data || null);
+
+            const dashboardRes = await api.get('/dashboard');
+            setData(dashboardRes.data);
+        } catch (err) {
+            console.error(err);
+        } finally {
+            setLoading(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        fetchData();
+
+        const onRefresh = () => fetchData();
+        window.addEventListener('dashboard:refresh', onRefresh);
+        window.addEventListener('focus', onRefresh);
+
+        return () => {
+            window.removeEventListener('dashboard:refresh', onRefresh);
+            window.removeEventListener('focus', onRefresh);
+        };
+    }, [fetchData]);
+
     if (user?.role === 'superadmin') {
         return <SuperAdminDashboard />;
     }
-
-    useEffect(() => {
-        const fetchData = async () => {
-            try {
-                const subRes = await api.get('/facility/subscription').catch(() => null);
-                setSubscription(subRes?.data || null);
-
-                const dashboardRes = await api.get('/dashboard');
-                setData(dashboardRes.data);
-            } catch (err) {
-                console.error(err);
-            } finally {
-                setLoading(false);
-            }
-        };
-        fetchData();
-    }, []);
 
     const handleSubscribeNow = async () => {
         if (subscribing) return;

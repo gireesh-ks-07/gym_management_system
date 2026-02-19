@@ -102,6 +102,12 @@ const toDateOnlyString = (value) => {
     return date.toISOString().split('T')[0];
 };
 
+const resolveClientStatusFromPaymentAndExpiry = ({ hasPayment, expiryDate }) => {
+    if (!hasPayment) return 'inactive';
+    if (!expiryDate) return 'inactive';
+    return expiryDate < new Date() ? 'payment_due' : 'active';
+};
+
 const createLimitExceededNotification = async (facility, type, limit, currentCount) => {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
@@ -301,7 +307,16 @@ const syncClientPlanStatuses = async (facilityId = null) => {
     });
 
     for (const client of clientsMissingExpiry) {
-        if (!client.Plan) continue;
+        if (!client.Plan) {
+            const nextStatus = 'inactive';
+            const nextExpiry = null;
+            if (client.status !== nextStatus || client.planExpiresAt !== nextExpiry) {
+                client.planExpiresAt = nextExpiry;
+                client.status = nextStatus;
+                await client.save();
+            }
+            continue;
+        }
 
         if (!client.billingRenewalDate) {
             client.billingRenewalDate = toDateOnlyString(client.joiningDate || client.createdAt || new Date());
@@ -309,27 +324,24 @@ const syncClientPlanStatuses = async (facilityId = null) => {
 
         const expiryDate = calculateClientPlanExpiry(client.billingRenewalDate, client.Plan.duration);
         if (!expiryDate) continue;
-        client.planExpiresAt = expiryDate;
-        client.status = expiryDate < new Date() ? 'payment_due' : 'active';
-        await client.save();
+
+        const paymentCount = await Payment.count({
+            where: { clientId: client.id, facilityId: client.facilityId }
+        });
+        const nextStatus = resolveClientStatusFromPaymentAndExpiry({
+            hasPayment: paymentCount > 0,
+            expiryDate
+        });
+
+        if (
+            client.status !== nextStatus ||
+            new Date(client.planExpiresAt || 0).getTime() !== expiryDate.getTime()
+        ) {
+            client.planExpiresAt = expiryDate;
+            client.status = nextStatus;
+            await client.save();
+        }
     }
-
-    const now = new Date();
-    const where = {
-        planId: { [Op.ne]: null },
-        planExpiresAt: { [Op.ne]: null, [Op.lt]: now }
-    };
-
-    if (facilityId) {
-        where.facilityId = facilityId;
-    } else {
-        where.facilityId = { [Op.ne]: null };
-    }
-
-    await Client.update(
-        { status: 'payment_due' },
-        { where }
-    );
 };
 
 // Middleware to check Facility Subscription Status
@@ -1098,7 +1110,7 @@ app.post('/api/clients', authenticate, checkSubscriptionStatus, authorize(['admi
                 const expiryDate = calculateClientPlanExpiry(clientData.billingRenewalDate, plan.duration);
                 if (expiryDate) {
                     clientData.planExpiresAt = expiryDate;
-                    clientData.status = expiryDate < new Date() ? 'payment_due' : 'active';
+                    clientData.status = 'inactive';
                 }
             }
         }
@@ -1326,15 +1338,16 @@ app.post('/api/payments', authenticate, checkSubscriptionStatus, authorize(['adm
             if (normalizedBillingDate) {
                 client.billingRenewalDate = normalizedBillingDate;
             }
-            client.status = 'active';
-
             // Calculate expiry based on plan duration
             if (client.Plan) {
                 const durationMonths = client.Plan.duration;
                 const expiryDate = calculateClientPlanExpiry(client.billingRenewalDate, durationMonths);
                 if (expiryDate) {
                     client.planExpiresAt = expiryDate;
+                    client.status = expiryDate < new Date() ? 'payment_due' : 'active';
                 }
+            } else {
+                client.status = 'active';
             }
             await client.save();
         }
@@ -1569,7 +1582,6 @@ app.put('/api/clients/:id', authenticate, checkSubscriptionStatus, authorize(['a
         client.phone = phone;
         client.height = height;
         client.weight = weight;
-        const previousBillingRenewalDate = client.billingRenewalDate || null;
         if (joiningDate) {
             client.joiningDate = toDateOnlyString(joiningDate);
         }
@@ -1589,16 +1601,21 @@ app.put('/api/clients/:id', authenticate, checkSubscriptionStatus, authorize(['a
             client.billingRenewalDate = toDateOnlyString(client.joiningDate || new Date());
         }
 
-        const billingDateChanged = previousBillingRenewalDate !== client.billingRenewalDate;
         const planChanged = oldPlanId !== client.planId;
 
-        if (client.planId && (planChanged || billingDateChanged)) {
+        if (client.planId) {
             const plan = await Plan.findByPk(client.planId);
             if (plan) {
                 const expiryDate = calculateClientPlanExpiry(client.billingRenewalDate, plan.duration);
                 if (expiryDate) {
                     client.planExpiresAt = expiryDate;
-                    client.status = expiryDate < new Date() ? 'payment_due' : 'active';
+                    const hasPayment = await Payment.count({
+                        where: { clientId: client.id, facilityId: req.user.facilityId }
+                    });
+                    client.status = resolveClientStatusFromPaymentAndExpiry({
+                        hasPayment: hasPayment > 0,
+                        expiryDate
+                    });
                 }
             }
         } else if (!client.planId && planChanged) {
