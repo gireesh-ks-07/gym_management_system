@@ -14,6 +14,7 @@ import Reports from './pages/Reports';
 import Plans from './pages/Plans';
 import SubscriptionPlans from './pages/SubscriptionPlans';
 import FacilityTypes from './pages/FacilityTypes';
+import HealthProfile from './pages/HealthProfile';
 
 const Loader = () => (
   <div className="loader-container">
@@ -78,6 +79,11 @@ const App = () => {
             <Route path="/clients" element={
               <ProtectedRoute roles={['admin', 'staff', 'superadmin']}>
                 <Clients />
+              </ProtectedRoute>
+            } />
+            <Route path="/clients/:id/health" element={
+              <ProtectedRoute roles={['admin', 'staff']}>
+                <HealthProfile />
               </ProtectedRoute>
             } />
 

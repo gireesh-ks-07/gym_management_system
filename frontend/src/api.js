@@ -1,8 +1,7 @@
 import axios from 'axios';
 
 const envBaseUrl = import.meta.env.VITE_API_BASE_URL;
-// Default to production API for all environments unless explicitly overridden.
-const baseURL = envBaseUrl || 'https://facilityapis.mobilemonks.in';
+const baseURL = envBaseUrl || 'http://localhost:3000';
 
 const api = axios.create({
     baseURL,

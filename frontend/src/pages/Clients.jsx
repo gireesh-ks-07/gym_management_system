@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import api from '../api';
-import { Plus, Search, User, Phone, Ruler, Weight, Calendar, Mail, Filter, CreditCard, CheckSquare, Square } from 'lucide-react';
+import { Plus, Search, User, Phone, Ruler, Weight, Calendar, Mail, Filter, CreditCard, CheckSquare, Square, HeartPulse, Target, Repeat2, ClipboardList } from 'lucide-react';
 import { useToast } from '../context/ToastContext';
 import ActionMenu from '../components/ActionMenu';
 import Modal from '../components/Modal';
@@ -31,6 +31,20 @@ const Clients = () => {
 
     const [showHistoryModal, setShowHistoryModal] = useState(false);
     const [selectedClientHistory, setSelectedClientHistory] = useState({ id: null, name: '' });
+    const [showHealthModal, setShowHealthModal] = useState(false);
+    const [selectedClientHealth, setSelectedClientHealth] = useState(null);
+    const [healthProfile, setHealthProfile] = useState({
+        goalType: '',
+        currentWeight: '',
+        targetWeight: '',
+        height: '',
+        bodyFatPercentage: '',
+        notes: ''
+    });
+    const [workoutPlans, setWorkoutPlans] = useState([]);
+    const [workoutForm, setWorkoutForm] = useState({ title: '', scheduledFor: new Date().toISOString().split('T')[0], notes: '' });
+    const [rescheduleMap, setRescheduleMap] = useState({});
+    const [healthEnabled, setHealthEnabled] = useState(false);
     const isTitleCaseCustomType = (type) => ['text', 'textarea'].includes(type);
 
     const location = useLocation();
@@ -49,10 +63,12 @@ const Clients = () => {
 
             // Fetch facility config for custom fields
             try {
-                const facRes = await api.get('/api/facility/subscription');
+                const facRes = await api.get('/facility/subscription');
                 setFacility(facRes.data);
+                setHealthEnabled(Boolean(facRes.data?.healthProfileEnabled));
             } catch (facErr) {
                 console.log('Not a facility user or failed to fetch facility config');
+                setHealthEnabled(false);
             }
 
             // Create a map of clientId -> true for quick lookup
@@ -157,6 +173,87 @@ const Clients = () => {
     const handleHistoryClick = (client) => {
         setSelectedClientHistory({ id: client.id, name: client.name });
         setShowHistoryModal(true);
+    };
+
+    const openHealthProfile = async (client) => {
+        try {
+            const res = await api.get(`/clients/${client.id}/health-profile`);
+            const hp = res.data?.healthProfile || {};
+            setSelectedClientHealth(client);
+            setHealthProfile({
+                goalType: hp.goalType || '',
+                currentWeight: hp.currentWeight ?? '',
+                targetWeight: hp.targetWeight ?? '',
+                height: hp.height ?? '',
+                bodyFatPercentage: hp.bodyFatPercentage ?? '',
+                notes: hp.notes || ''
+            });
+            setWorkoutPlans(res.data?.workoutPlans || []);
+            setWorkoutForm({ title: '', scheduledFor: new Date().toISOString().split('T')[0], notes: '' });
+            setRescheduleMap({});
+            setShowHealthModal(true);
+        } catch (err) {
+            addToast(err?.response?.data?.message || 'Failed to load health profile', 'error');
+        }
+    };
+
+    const saveHealthProfile = async () => {
+        if (!selectedClientHealth) return;
+        try {
+            await api.put(`/clients/${selectedClientHealth.id}/health-profile`, healthProfile);
+            addToast('Health profile updated', 'success');
+        } catch (err) {
+            addToast(err?.response?.data?.message || 'Failed to update health profile', 'error');
+        }
+    };
+
+    const scheduleWorkout = async () => {
+        if (!selectedClientHealth) return;
+        if (!workoutForm.title.trim() || !workoutForm.scheduledFor) {
+            addToast('Workout title and date are required', 'error');
+            return;
+        }
+        try {
+            const res = await api.post(`/clients/${selectedClientHealth.id}/workout-plans`, workoutForm);
+            setWorkoutPlans(res.data?.workoutPlans || []);
+            setWorkoutForm({ title: '', scheduledFor: new Date().toISOString().split('T')[0], notes: '' });
+            addToast('Workout scheduled', 'success');
+        } catch (err) {
+            addToast(err?.response?.data?.message || 'Failed to schedule workout', 'error');
+        }
+    };
+
+    const rescheduleWorkout = async (planId) => {
+        if (!selectedClientHealth) return;
+        const data = rescheduleMap[planId];
+        if (!data?.date) {
+            addToast('Select a reschedule date', 'error');
+            return;
+        }
+        try {
+            const res = await api.put(`/clients/${selectedClientHealth.id}/workout-plans/${planId}/reschedule`, {
+                rescheduledFor: data.date,
+                reason: data.reason || ''
+            });
+            setWorkoutPlans(res.data?.workoutPlans || []);
+            addToast('Workout rescheduled', 'success');
+        } catch (err) {
+            addToast(err?.response?.data?.message || 'Failed to reschedule workout', 'error');
+        }
+    };
+
+    const markWorkoutProgress = async (planId, status) => {
+        if (!selectedClientHealth) return;
+        try {
+            const res = await api.post(`/clients/${selectedClientHealth.id}/workout-plans/${planId}/progress`, {
+                status,
+                note: status === 'completed' ? 'Completed as planned' : 'Marked as missed'
+            });
+            setWorkoutPlans(res.data?.workoutPlans || []);
+            addToast('Workout progress updated', 'success');
+        } catch (err) {
+            addToast(err?.response?.data?.message || 'Failed to update workout progress', 'error');
+        }
     };
 
     const handleSubmit = async (e) => {
@@ -300,6 +397,7 @@ const Clients = () => {
                                 onEdit={() => handleEditClick(client)}
                                 onDelete={() => handleDeleteClick(client.id)}
                                 onHistory={() => handleHistoryClick(client)}
+                                onHealth={healthEnabled ? () => navigate(`/clients/${client.id}/health`) : undefined}
                             />
                         </div>
 
@@ -540,6 +638,109 @@ const Clients = () => {
                 clientId={selectedClientHistory.id}
                 clientName={selectedClientHistory.name}
             />
+
+            <Modal
+                isOpen={showHealthModal}
+                onClose={() => setShowHealthModal(false)}
+                title={selectedClientHealth ? `Health Profile - ${selectedClientHealth.name}` : 'Health Profile'}
+            >
+                <div style={{ display: 'grid', gap: '1rem' }}>
+                    <div style={{ padding: '1rem', borderRadius: '14px', border: '1px solid rgba(16,185,129,0.25)', background: 'linear-gradient(135deg, rgba(16,185,129,0.16), rgba(59,130,246,0.08))' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.75rem' }}>
+                            <HeartPulse size={16} color="var(--primary)" />
+                            <span style={{ fontWeight: 700 }}>Goal & Body Metrics</span>
+                        </div>
+                        <div className="form-grid">
+                            <div className="input-group">
+                                <label className="input-label">Goal Type</label>
+                                <select className="input-field" value={healthProfile.goalType} onChange={(e) => setHealthProfile({ ...healthProfile, goalType: e.target.value })}>
+                                    <option value="">Select Goal</option>
+                                    <option value="weight_loss">Weight Loss</option>
+                                    <option value="weight_gain">Weight Gain</option>
+                                    <option value="muscle_gain">Muscle Gain</option>
+                                </select>
+                            </div>
+                            <div className="input-group">
+                                <label className="input-label">Current Weight (kg)</label>
+                                <input className="input-field" type="number" value={healthProfile.currentWeight} onChange={(e) => setHealthProfile({ ...healthProfile, currentWeight: e.target.value })} />
+                            </div>
+                        </div>
+                        <div className="form-grid">
+                            <div className="input-group">
+                                <label className="input-label">Target Weight (kg)</label>
+                                <input className="input-field" type="number" value={healthProfile.targetWeight} onChange={(e) => setHealthProfile({ ...healthProfile, targetWeight: e.target.value })} />
+                            </div>
+                            <div className="input-group">
+                                <label className="input-label">Height (cm)</label>
+                                <input className="input-field" type="number" value={healthProfile.height} onChange={(e) => setHealthProfile({ ...healthProfile, height: e.target.value })} />
+                            </div>
+                        </div>
+                        <div className="form-grid">
+                            <div className="input-group">
+                                <label className="input-label">Body Fat (%)</label>
+                                <input className="input-field" type="number" value={healthProfile.bodyFatPercentage} onChange={(e) => setHealthProfile({ ...healthProfile, bodyFatPercentage: e.target.value })} />
+                            </div>
+                            <div className="input-group">
+                                <label className="input-label">Notes</label>
+                                <input className="input-field" value={healthProfile.notes} onChange={(e) => setHealthProfile({ ...healthProfile, notes: e.target.value })} />
+                            </div>
+                        </div>
+                        <button className="btn btn-primary" onClick={saveHealthProfile}>Save Health Profile</button>
+                    </div>
+
+                    <div style={{ padding: '1rem', borderRadius: '14px', border: '1px solid var(--border-color)', background: 'rgba(255,255,255,0.03)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.75rem' }}>
+                            <ClipboardList size={16} color="var(--accent-blue)" />
+                            <span style={{ fontWeight: 700 }}>Workout Scheduling</span>
+                        </div>
+                        <div className="form-grid">
+                            <div className="input-group">
+                                <label className="input-label">Workout Plan</label>
+                                <input className="input-field" value={workoutForm.title} onChange={(e) => setWorkoutForm({ ...workoutForm, title: e.target.value })} placeholder="Push Day / Cardio / Legs..." />
+                            </div>
+                            <div className="input-group">
+                                <label className="input-label">Schedule Date</label>
+                                <input className="input-field" type="date" value={workoutForm.scheduledFor} onChange={(e) => setWorkoutForm({ ...workoutForm, scheduledFor: e.target.value })} />
+                            </div>
+                        </div>
+                        <div className="input-group">
+                            <label className="input-label">Plan Notes</label>
+                            <input className="input-field" value={workoutForm.notes} onChange={(e) => setWorkoutForm({ ...workoutForm, notes: e.target.value })} placeholder="Session instructions..." />
+                        </div>
+                        <button className="btn btn-secondary" onClick={scheduleWorkout}>
+                            <Target size={16} />
+                            <span>Schedule Workout</span>
+                        </button>
+
+                        <div style={{ marginTop: '1rem', display: 'grid', gap: '0.75rem' }}>
+                            {workoutPlans.length === 0 && (
+                                <div style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>No workouts scheduled yet.</div>
+                            )}
+                            {workoutPlans.map((plan) => (
+                                <div key={plan.id} style={{ border: '1px solid var(--border-color)', borderRadius: '12px', padding: '0.85rem', background: 'rgba(0,0,0,0.2)' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'center' }}>
+                                        <div>
+                                            <div style={{ fontWeight: 700 }}>{plan.title}</div>
+                                            <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>Scheduled: {plan.scheduledFor} • Status: {(plan.status || 'scheduled').toUpperCase()}</div>
+                                        </div>
+                                        <div style={{ display: 'flex', gap: '0.4rem' }}>
+                                            <button className="btn btn-primary" style={{ padding: '0.35rem 0.65rem' }} onClick={() => markWorkoutProgress(plan.id, 'completed')}>Done</button>
+                                            <button className="btn btn-secondary" style={{ padding: '0.35rem 0.65rem' }} onClick={() => markWorkoutProgress(plan.id, 'missed')}>Missed</button>
+                                        </div>
+                                    </div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '0.5rem', marginTop: '0.65rem' }}>
+                                        <input className="input-field" type="date" value={rescheduleMap[plan.id]?.date || ''} onChange={(e) => setRescheduleMap((prev) => ({ ...prev, [plan.id]: { ...(prev[plan.id] || {}), date: e.target.value } }))} />
+                                        <input className="input-field" placeholder="Reason" value={rescheduleMap[plan.id]?.reason || ''} onChange={(e) => setRescheduleMap((prev) => ({ ...prev, [plan.id]: { ...(prev[plan.id] || {}), reason: e.target.value } }))} />
+                                        <button className="btn btn-secondary" onClick={() => rescheduleWorkout(plan.id)}>
+                                            <Repeat2 size={14} />
+                                        </button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            </Modal>
         </div>
     );
 };

@@ -15,7 +15,7 @@ const Facilities = () => {
     const [isEditMode, setIsEditMode] = useState(false);
     const [currentFacilityId, setCurrentFacilityId] = useState(null);
     const [formData, setFormData] = useState({
-        name: '', address: '', adminEmail: '', adminPassword: '', adminName: '', planId: '', facilityTypeId: ''
+        name: '', address: '', adminEmail: '', adminPassword: '', adminName: '', planId: '', facilityTypeId: '', healthProfileEnabled: false
     });
     const [plans, setPlans] = useState([]);
     const [facilityTypes, setFacilityTypes] = useState([]);
@@ -54,7 +54,7 @@ const Facilities = () => {
         const queryParams = new URLSearchParams(location.search);
         if (queryParams.get('action') === 'add') {
             setIsEditMode(false);
-            setFormData({ name: '', address: '', adminEmail: '', adminPassword: '', adminName: '', planId: '', facilityTypeId: '' });
+            setFormData({ name: '', address: '', adminEmail: '', adminPassword: '', adminName: '', planId: '', facilityTypeId: '', healthProfileEnabled: false });
             setShowModal(true);
             queryParams.delete('action');
             const nextSearch = queryParams.toString();
@@ -70,7 +70,7 @@ const Facilities = () => {
 
     const handleAddClick = () => {
         setIsEditMode(false);
-        setFormData({ name: '', address: '', adminEmail: '', adminPassword: '', adminName: '', planId: '', facilityTypeId: '' });
+        setFormData({ name: '', address: '', adminEmail: '', adminPassword: '', adminName: '', planId: '', facilityTypeId: '', healthProfileEnabled: false });
         setShowModal(true);
     };
 
@@ -83,7 +83,8 @@ const Facilities = () => {
             adminEmail: '',
             adminPassword: '',
             adminName: '',
-            facilityTypeId: facility.facilityTypeId || ''
+            facilityTypeId: facility.facilityTypeId || '',
+            healthProfileEnabled: Boolean(facility.healthProfileEnabled)
         });
         setShowModal(true);
     };
@@ -140,6 +141,8 @@ const Facilities = () => {
                     type: formData.type,
                     address: formData.address,
                     facilityTypeId: formData.facilityTypeId || null
+                    ,
+                    healthProfileEnabled: Boolean(formData.healthProfileEnabled)
                 });
                 addToast('Facility updated successfully', 'success');
             } else {
@@ -147,7 +150,7 @@ const Facilities = () => {
                 addToast('Facility created successfully', 'success');
             }
             setShowModal(false);
-            setFormData({ name: '', address: '', adminEmail: '', adminPassword: '', adminName: '', planId: '', facilityTypeId: '' });
+            setFormData({ name: '', address: '', adminEmail: '', adminPassword: '', adminName: '', planId: '', facilityTypeId: '', healthProfileEnabled: false });
             fetchFacilities();
         } catch (err) {
             addToast(isEditMode ? 'Failed to update facility' : 'Failed to create facility', 'error');
@@ -446,6 +449,20 @@ const Facilities = () => {
                     <div className="input-group">
                         <label className="input-label">Address</label>
                         <input className="input-field" value={formData.address} onChange={e => setFormData({ ...formData, address: toTitleCase(e.target.value) })} placeholder="e.g. 123 Main St, New York" />
+                    </div>
+
+                    <div className="input-group">
+                        <label className="input-label">Health Profile Module</label>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer', padding: '0.75rem 1rem', border: '1px solid var(--border-color)', borderRadius: '12px', background: 'rgba(255,255,255,0.03)' }}>
+                            <input
+                                type="checkbox"
+                                checked={Boolean(formData.healthProfileEnabled)}
+                                onChange={e => setFormData({ ...formData, healthProfileEnabled: e.target.checked })}
+                            />
+                            <span style={{ color: 'var(--text-secondary)' }}>
+                                Enable health profile, goals, and workout scheduling for this facility
+                            </span>
+                        </label>
                     </div>
 
                     {!isEditMode && (

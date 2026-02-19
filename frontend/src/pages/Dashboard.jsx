@@ -238,7 +238,7 @@ const Dashboard = () => {
                     <p style={{ color: 'var(--text-muted)' }}>Real-time overview of your facility.</p>
                 </div>
 
-            <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+                <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
                     {subscription && (
                         <div className={`card ${subscription.subscriptionStatus === 'active' ? 'status-active' : 'status-expired'}`}
                             style={{

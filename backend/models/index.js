@@ -77,7 +77,8 @@ const Facility = sequelize.define('Facility', {
         type: DataTypes.ENUM('active', 'expired', 'suspended'),
         defaultValue: 'active'
     },
-    subscriptionExpiresAt: { type: DataTypes.DATE, allowNull: true }
+    subscriptionExpiresAt: { type: DataTypes.DATE, allowNull: true },
+    healthProfileEnabled: { type: DataTypes.BOOLEAN, defaultValue: false }
 });
 
 const Client = sequelize.define('Client', {
@@ -97,6 +98,9 @@ const Client = sequelize.define('Client', {
     billingRenewalDate: { type: DataTypes.DATEONLY, allowNull: true },
     planExpiresAt: { type: DataTypes.DATE, allowNull: true },
     customFields: { type: DataTypes.JSON, defaultValue: {} } // Store custom field values
+    ,
+    healthProfile: { type: DataTypes.JSON, defaultValue: {} },
+    workoutPlans: { type: DataTypes.JSON, defaultValue: [] }
 });
 
 const Attendance = sequelize.define('Attendance', {

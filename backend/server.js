@@ -102,6 +102,264 @@ const toDateOnlyString = (value) => {
     return date.toISOString().split('T')[0];
 };
 
+const normalizeGoalType = (value) => {
+    if (!value) return null;
+    const normalized = String(value).trim().toLowerCase();
+    const allowed = ['weight_loss', 'weight_gain', 'muscle_gain'];
+    return allowed.includes(normalized) ? normalized : null;
+};
+
+const toNullableNumber = (value) => {
+    if (value === null || value === undefined || value === '') return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+};
+
+const sanitizeHealthProfile = (payload = {}) => {
+    const source = payload || {};
+    return {
+        goalType: normalizeGoalType(source.goalType),
+        currentWeight: toNullableNumber(source.currentWeight),
+        targetWeight: toNullableNumber(source.targetWeight),
+        height: toNullableNumber(source.height),
+        bodyFatPercentage: toNullableNumber(source.bodyFatPercentage),
+        notes: (source.notes || '').toString().trim(),
+        updatedAt: new Date().toISOString()
+    };
+};
+
+const createWorkoutEntry = ({ title, scheduledFor, notes } = {}) => ({
+    id: `wp_${Date.now()}_${Math.floor(Math.random() * 100000)}`,
+    title: (title || 'Workout Session').toString().trim(),
+    scheduledFor: toDateOnlyString(scheduledFor || new Date()),
+    notes: (notes || '').toString().trim(),
+    status: 'scheduled',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    rescheduleHistory: []
+});
+
+const getHealthState = (client) => {
+    const profile = (client.healthProfile && typeof client.healthProfile === 'object')
+        ? { ...client.healthProfile }
+        : {};
+    profile.weeklyWeights = Array.isArray(profile.weeklyWeights)
+        ? [...profile.weeklyWeights]
+        : [];
+    profile.currentSchedule =
+        profile.currentSchedule && typeof profile.currentSchedule === 'object'
+            ? { ...profile.currentSchedule }
+            : null;
+    profile.pastSchedules = Array.isArray(profile.pastSchedules)
+        ? [...profile.pastSchedules]
+        : [];
+    profile.workoutCalendar = Array.isArray(profile.workoutCalendar)
+        ? [...profile.workoutCalendar]
+        : [];
+    return profile;
+};
+
+const weekdayName = (dateLike) => {
+    const date = parseDateValue(dateLike);
+    if (!date) return '';
+    const names = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    return names[date.getDay()];
+};
+
+const dayDiff = (a, b) => {
+    const one = parseDateValue(a);
+    const two = parseDateValue(b);
+    if (!one || !two) return 0;
+    one.setHours(0, 0, 0, 0);
+    two.setHours(0, 0, 0, 0);
+    return Math.round((one.getTime() - two.getTime()) / (1000 * 60 * 60 * 24));
+};
+
+const dateRangeInclusive = (start, end) => {
+    const startDate = parseDateValue(start);
+    const endDate = parseDateValue(end);
+    if (!startDate || !endDate) return [];
+    startDate.setHours(0, 0, 0, 0);
+    endDate.setHours(0, 0, 0, 0);
+    if (endDate < startDate) return [];
+
+    const result = [];
+    const cursor = new Date(startDate);
+    while (cursor <= endDate) {
+        result.push(toDateOnlyString(cursor));
+        cursor.setDate(cursor.getDate() + 1);
+    }
+    return result;
+};
+
+const assignedWorkoutDayForDate = (schedule, dateStr) => {
+    const days = Array.isArray(schedule?.days) ? schedule.days : [];
+    if (days.length === 0) return null;
+    const startDate = schedule.startDate || toDateOnlyString(schedule.startedAt) || toDateOnlyString(new Date());
+    const diff = dayDiff(dateStr, startDate);
+    if (diff < 0) return null;
+
+    const offDays = Array.isArray(schedule.offDays)
+        ? schedule.offDays.map((d) => String(d).toLowerCase())
+        : ['sunday'];
+
+    let workoutSlots = 0;
+    for (const date of dateRangeInclusive(startDate, dateStr)) {
+        if (offDays.includes(weekdayName(date))) continue;
+        workoutSlots += 1;
+    }
+    if (workoutSlots <= 0) return null;
+
+    const idx = (workoutSlots - 1) % days.length;
+    return days[idx];
+};
+
+const computeHealthDashboard = (profile = {}) => {
+    const weeklyWeights = Array.isArray(profile.weeklyWeights) ? [...profile.weeklyWeights] : [];
+    const workoutCalendar = Array.isArray(profile.workoutCalendar) ? [...profile.workoutCalendar] : [];
+    const currentSchedule = profile.currentSchedule && typeof profile.currentSchedule === 'object'
+        ? { ...profile.currentSchedule }
+        : null;
+
+    const sortedWeights = weeklyWeights
+        .map((x) => ({
+            date: toDateOnlyString(x.date),
+            weight: toNullableNumber(x.weight)
+        }))
+        .filter((x) => x.date && x.weight != null)
+        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+    const currentWeight = toNullableNumber(profile.currentWeight) ?? sortedWeights.at(-1)?.weight ?? null;
+    const targetWeight = toNullableNumber(profile.targetWeight);
+    const startWeight = sortedWeights[0]?.weight ?? currentWeight;
+    const height = toNullableNumber(profile.height);
+    const heightMeters = height ? height / 100 : null;
+    const bmi = (heightMeters && currentWeight)
+        ? Number((currentWeight / (heightMeters * heightMeters)).toFixed(1))
+        : null;
+
+    let progressPct = 0;
+    if (targetWeight && startWeight && currentWeight) {
+        if (profile.goalType === 'weight_loss') {
+            progressPct = ((startWeight - currentWeight) / Math.max(startWeight - targetWeight, 1)) * 100;
+        } else if (profile.goalType === 'weight_gain' || profile.goalType === 'muscle_gain') {
+            progressPct = ((currentWeight - startWeight) / Math.max(targetWeight - startWeight, 1)) * 100;
+        }
+    }
+    progressPct = Math.max(0, Math.min(100, Math.round(progressPct)));
+
+    const today = new Date();
+    const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+    const weekStart = new Date(today);
+    weekStart.setDate(weekStart.getDate() - 6);
+
+    const monthWeights = sortedWeights.filter((x) => new Date(x.date) >= monthStart);
+    const weekWeights = sortedWeights.filter((x) => new Date(x.date) >= weekStart);
+    const monthDelta = monthWeights.length >= 2 ? Number((monthWeights.at(-1).weight - monthWeights[0].weight).toFixed(1)) : 0;
+    const weekDelta = weekWeights.length >= 2 ? Number((weekWeights.at(-1).weight - weekWeights[0].weight).toFixed(1)) : 0;
+
+    const recentEvents = workoutCalendar.filter((x) => parseDateValue(x.date) >= weekStart);
+    const completedWeek = recentEvents.filter((x) => x.status === 'done').length;
+    const missedWeek = recentEvents.filter((x) => x.status === 'missed').length;
+
+    let trendPct = 0;
+    if (weekWeights.length >= 2) {
+        const first = Math.max(weekWeights[0].weight, 1);
+        trendPct = Number((((weekWeights.at(-1).weight - weekWeights[0].weight) / first) * 100).toFixed(1));
+    }
+
+    const doneSet = new Set(
+        workoutCalendar
+            .filter((x) => x.status === 'done')
+            .map((x) => toDateOnlyString(x.date))
+            .filter(Boolean)
+    );
+    let streakCount = 0;
+    const cursor = new Date(today);
+    while (doneSet.has(toDateOnlyString(cursor))) {
+        streakCount += 1;
+        cursor.setDate(cursor.getDate() - 1);
+    }
+
+    const doneCount = workoutCalendar.filter((x) => x.status === 'done').length;
+    const missedCount = workoutCalendar.filter((x) => x.status === 'missed').length;
+    const consistencyPct = doneCount + missedCount > 0
+        ? Math.round((doneCount / (doneCount + missedCount)) * 100)
+        : 0;
+
+    let nextWorkoutDay = null;
+    if (currentSchedule && Array.isArray(currentSchedule.days) && currentSchedule.days.length) {
+        const doneEvents = workoutCalendar
+            .filter((x) => x.status === 'done' && x.dayNumber)
+            .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+        const lastDoneDay = doneEvents.at(-1)?.dayNumber;
+        const sortedDays = [...currentSchedule.days]
+            .sort((a, b) => Number(a.dayNumber) - Number(b.dayNumber))
+            .map((d) => Number(d.dayNumber));
+        if (!lastDoneDay) {
+            nextWorkoutDay = sortedDays[0] || null;
+        } else {
+            const idx = sortedDays.findIndex((x) => x === Number(lastDoneDay));
+            nextWorkoutDay = idx < 0 || idx === sortedDays.length - 1
+                ? (sortedDays[0] || null)
+                : sortedDays[idx + 1];
+        }
+    }
+
+    const completedDayNumbers = [
+        ...new Set(
+            workoutCalendar
+                .filter((x) => x.status === 'done' && x.dayNumber != null)
+                .map((x) => Number(x.dayNumber))
+        )
+    ];
+
+    const currentMonthEvents = workoutCalendar.filter((x) => {
+        const d = parseDateValue(x.date);
+        return d && d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth();
+    });
+    const currentMonthStats = {
+        completed: currentMonthEvents.filter((x) => x.status === 'done').length,
+        missed: currentMonthEvents.filter((x) => x.status === 'missed').length,
+        cardio: currentMonthEvents.filter((x) => x.status === 'cardio').length,
+        off: currentMonthEvents.filter((x) => x.status === 'off_day').length
+    };
+    currentMonthStats.consistency = currentMonthStats.completed + currentMonthStats.missed > 0
+        ? Math.round((currentMonthStats.completed / (currentMonthStats.completed + currentMonthStats.missed)) * 100)
+        : 0;
+
+    let smartInsight = 'Consistency is good. Maintain progressive overload and weekly updates.';
+    if (missedWeek > 2) {
+        smartInsight = 'Missed sessions are high. Suggest 2-day recovery split and volume reset.';
+    } else if (Math.abs(weekDelta) < 0.05) {
+        smartInsight = 'Weight progress is stagnant. Add 15-20 mins cardio post-workout.';
+    }
+
+    return {
+        currentWeight,
+        targetWeight,
+        bmi,
+        progressPct,
+        monthDelta,
+        weekDelta,
+        completedWeek,
+        missedWeek,
+        trendPct,
+        streakCount,
+        consistencyPct,
+        nextWorkoutDay,
+        completedDayNumbers,
+        currentMonthStats,
+        smartInsight
+    };
+};
+
+const getFacilityHealthFeature = async (facilityId) => {
+    if (!facilityId) return false;
+    const facility = await Facility.findByPk(facilityId, { attributes: ['id', 'healthProfileEnabled'] });
+    return Boolean(facility?.healthProfileEnabled);
+};
+
 const resolveClientStatusFromPaymentAndExpiry = ({ hasPayment, expiryDate }) => {
     if (!hasPayment) return 'inactive';
     if (!expiryDate) return 'inactive';
@@ -526,7 +784,7 @@ app.delete('/api/facility-types/:id', authenticate, authorize(['superadmin']), a
 
 app.post('/api/facilities', authenticate, authorize(['superadmin']), async (req, res) => {
     try {
-        const { name, type, address, adminEmail, adminPassword, adminName, planId, facilityTypeId } = req.body;
+        const { name, type, address, adminEmail, adminPassword, adminName, planId, facilityTypeId, healthProfileEnabled } = req.body;
 
         if (!planId) {
             return res.status(400).json({ message: 'Subscription plan is required while creating facility.' });
@@ -542,7 +800,8 @@ app.post('/api/facilities', authenticate, authorize(['superadmin']), async (req,
             subscriptionPlanId: planId,
             subscriptionExpiresAt: null,
             subscriptionStatus: 'pending',
-            facilityTypeId: facilityTypeId || null
+            facilityTypeId: facilityTypeId || null,
+            healthProfileEnabled: Boolean(healthProfileEnabled)
         });
 
         // Add Notification for Super Admin
@@ -1065,7 +1324,7 @@ app.post('/api/razorpay/webhook', async (req, res) => {
 
 app.post('/api/clients', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
     try {
-        const { name, email, phone, height, weight, joiningDate, billingRenewalDate, gender, aadhaar_number, address, customFields } = req.body;
+        const { name, email, phone, height, weight, joiningDate, billingRenewalDate, gender, aadhaar_number, address, customFields, healthProfile, workoutPlans } = req.body;
         // Ensure the staff/admin belongs to a facility
         if (!req.user.facilityId) return res.status(400).json({ message: 'User not associated with a facility' });
 
@@ -1103,6 +1362,12 @@ app.post('/api/clients', authenticate, checkSubscriptionStatus, authorize(['admi
             addedBy: req.user.id,
             customFields: customFields || {}
         };
+
+        const healthEnabled = await getFacilityHealthFeature(req.user.facilityId);
+        if (healthEnabled) {
+            clientData.healthProfile = sanitizeHealthProfile(healthProfile);
+            clientData.workoutPlans = Array.isArray(workoutPlans) ? workoutPlans : [];
+        }
 
         if (clientData.planId) {
             const plan = await Plan.findByPk(clientData.planId);
@@ -1485,12 +1750,18 @@ app.get('/api/reports', authenticate, checkSubscriptionStatus, authorize(['admin
 
 app.put('/api/facilities/:id', authenticate, authorize(['superadmin']), async (req, res) => {
     try {
-        const { name, address } = req.body;
+        const { name, address, facilityTypeId, healthProfileEnabled } = req.body;
         const facility = await Facility.findByPk(req.params.id);
         if (!facility) return res.status(404).json({ message: 'Facility not found' });
 
-        facility.name = name;
-        facility.address = address;
+        facility.name = name ?? facility.name;
+        facility.address = address ?? facility.address;
+        if (Object.prototype.hasOwnProperty.call(req.body, 'facilityTypeId')) {
+            facility.facilityTypeId = facilityTypeId || null;
+        }
+        if (Object.prototype.hasOwnProperty.call(req.body, 'healthProfileEnabled')) {
+            facility.healthProfileEnabled = Boolean(healthProfileEnabled);
+        }
         await facility.save();
         res.json(facility);
     } catch (error) {
@@ -1572,7 +1843,7 @@ app.delete('/api/facilities/:id', authenticate, authorize(['superadmin']), async
 
 app.put('/api/clients/:id', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
     try {
-        const { name, email, phone, height, weight, joiningDate, billingRenewalDate, gender, aadhaar_number, address, customFields } = req.body;
+        const { name, email, phone, height, weight, joiningDate, billingRenewalDate, gender, aadhaar_number, address, customFields, healthProfile, workoutPlans } = req.body;
         const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
 
         if (!client) return res.status(404).json({ message: 'Client not found' });
@@ -1592,6 +1863,15 @@ app.put('/api/clients/:id', authenticate, checkSubscriptionStatus, authorize(['a
         client.aadhaar_number = aadhaar_number;
         client.address = address;
         client.customFields = customFields || client.customFields;
+        const healthEnabled = await getFacilityHealthFeature(req.user.facilityId);
+        if (healthEnabled) {
+            if (Object.prototype.hasOwnProperty.call(req.body, 'healthProfile')) {
+                client.healthProfile = sanitizeHealthProfile(healthProfile);
+            }
+            if (Object.prototype.hasOwnProperty.call(req.body, 'workoutPlans')) {
+                client.workoutPlans = Array.isArray(workoutPlans) ? workoutPlans : [];
+            }
+        }
         const oldPlanId = client.planId;
         if (Object.prototype.hasOwnProperty.call(req.body, 'planId')) {
             client.planId = req.body.planId || null;
@@ -1635,6 +1915,373 @@ app.delete('/api/clients/:id', authenticate, checkSubscriptionStatus, authorize(
         if (!client) return res.status(404).json({ message: 'Client not found' });
         await client.destroy();
         res.json({ message: 'Client deleted successfully' });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/clients/:id/health-profile', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+    try {
+        const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
+        if (!client) return res.status(404).json({ message: 'Client not found' });
+        const healthEnabled = await getFacilityHealthFeature(req.user.facilityId);
+        if (!healthEnabled) {
+            return res.status(403).json({ message: 'Health profile is disabled for this facility.' });
+        }
+
+        const profile = getHealthState(client);
+        if (profile.currentSchedule) {
+            const schedule = { ...profile.currentSchedule };
+            const startDate = schedule.startDate || toDateOnlyString(schedule.startedAt) || toDateOnlyString(new Date());
+            const endDate = schedule.endDate || toDateOnlyString(new Date());
+            const today = toDateOnlyString(new Date());
+            const until = dayDiff(endDate, today) < 0 ? endDate : today;
+            const offDays = Array.isArray(schedule.offDays)
+                ? schedule.offDays.map((d) => String(d).toLowerCase())
+                : ['sunday'];
+
+            const existing = Array.isArray(profile.workoutCalendar)
+                ? [...profile.workoutCalendar]
+                : [];
+            const hasEntry = (dateStr) =>
+                existing.some((e) => e.scheduleId === schedule.id && e.date === dateStr);
+
+            for (const dateStr of dateRangeInclusive(startDate, until)) {
+                if (hasEntry(dateStr)) continue;
+                if (offDays.includes(weekdayName(dateStr))) {
+                    existing.unshift({
+                        id: `wlog_auto_off_${schedule.id}_${dateStr}`,
+                        date: dateStr,
+                        scheduleId: schedule.id,
+                        dayNumber: null,
+                        status: 'off_day',
+                        note: 'Default off day',
+                        cardioMinutes: null,
+                        createdBy: null,
+                        createdAt: new Date().toISOString(),
+                        autoGenerated: true
+                    });
+                    continue;
+                }
+
+                const assigned = assignedWorkoutDayForDate(schedule, dateStr);
+                existing.unshift({
+                    id: `wlog_auto_missed_${schedule.id}_${dateStr}`,
+                    date: dateStr,
+                    scheduleId: schedule.id,
+                    dayNumber: assigned?.dayNumber ?? null,
+                    status: 'missed',
+                    note: 'Auto-marked missed',
+                    cardioMinutes: null,
+                    createdBy: null,
+                    createdAt: new Date().toISOString(),
+                    autoGenerated: true
+                });
+            }
+
+            profile.workoutCalendar = existing
+                .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+            client.healthProfile = profile;
+            await client.save();
+        }
+        res.json({
+            clientId: client.id,
+            name: client.name,
+            phone: client.phone,
+            healthProfile: profile,
+            dashboard: computeHealthDashboard(profile),
+            workoutPlans: Array.isArray(client.workoutPlans) ? client.workoutPlans : []
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.put('/api/clients/:id/health-profile', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+    try {
+        const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
+        if (!client) return res.status(404).json({ message: 'Client not found' });
+        const healthEnabled = await getFacilityHealthFeature(req.user.facilityId);
+        if (!healthEnabled) {
+            return res.status(403).json({ message: 'Health profile is disabled for this facility.' });
+        }
+
+        const incoming = sanitizeHealthProfile(req.body || {});
+        const current = getHealthState(client);
+        client.healthProfile = {
+            ...current,
+            ...incoming
+        };
+        await client.save();
+        res.json({ healthProfile: client.healthProfile });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/clients/:id/workout-plans', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+    try {
+        const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
+        if (!client) return res.status(404).json({ message: 'Client not found' });
+        const healthEnabled = await getFacilityHealthFeature(req.user.facilityId);
+        if (!healthEnabled) {
+            return res.status(403).json({ message: 'Health profile is disabled for this facility.' });
+        }
+
+        const { title, scheduledFor, notes } = req.body || {};
+        const entry = createWorkoutEntry({ title, scheduledFor, notes });
+        const current = Array.isArray(client.workoutPlans) ? [...client.workoutPlans] : [];
+        current.unshift(entry);
+        client.workoutPlans = current;
+        await client.save();
+        res.json({ workoutPlan: entry, workoutPlans: current });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.put('/api/clients/:id/workout-plans/:planId/reschedule', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+    try {
+        const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
+        if (!client) return res.status(404).json({ message: 'Client not found' });
+        const healthEnabled = await getFacilityHealthFeature(req.user.facilityId);
+        if (!healthEnabled) {
+            return res.status(403).json({ message: 'Health profile is disabled for this facility.' });
+        }
+
+        const { rescheduledFor, reason } = req.body || {};
+        const plans = Array.isArray(client.workoutPlans) ? [...client.workoutPlans] : [];
+        const index = plans.findIndex((p) => p.id === req.params.planId);
+        if (index < 0) return res.status(404).json({ message: 'Workout plan not found' });
+
+        const nextDate = toDateOnlyString(rescheduledFor);
+        if (!nextDate) {
+            return res.status(400).json({ message: 'Valid rescheduled date is required.' });
+        }
+
+        const current = { ...plans[index] };
+        const history = Array.isArray(current.rescheduleHistory)
+            ? [...current.rescheduleHistory]
+            : [];
+        history.unshift({
+            from: current.scheduledFor || null,
+            to: nextDate,
+            reason: (reason || '').toString().trim(),
+            by: req.user.id,
+            at: new Date().toISOString()
+        });
+
+        current.scheduledFor = nextDate;
+        current.status = 'rescheduled';
+        current.updatedAt = new Date().toISOString();
+        current.rescheduleHistory = history;
+        plans[index] = current;
+
+        client.workoutPlans = plans;
+        await client.save();
+        res.json({ workoutPlan: current, workoutPlans: plans });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/clients/:id/workout-plans/:planId/progress', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+    try {
+        const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
+        if (!client) return res.status(404).json({ message: 'Client not found' });
+        const healthEnabled = await getFacilityHealthFeature(req.user.facilityId);
+        if (!healthEnabled) {
+            return res.status(403).json({ message: 'Health profile is disabled for this facility.' });
+        }
+
+        const { status, note } = req.body || {};
+        const nextStatus = ['scheduled', 'rescheduled', 'completed', 'missed'].includes(status)
+            ? status
+            : 'completed';
+
+        const plans = Array.isArray(client.workoutPlans) ? [...client.workoutPlans] : [];
+        const index = plans.findIndex((p) => p.id === req.params.planId);
+        if (index < 0) return res.status(404).json({ message: 'Workout plan not found' });
+
+        const current = { ...plans[index] };
+        const progress = Array.isArray(current.progress) ? [...current.progress] : [];
+        progress.unshift({
+            status: nextStatus,
+            note: (note || '').toString().trim(),
+            by: req.user.id,
+            at: new Date().toISOString()
+        });
+        current.status = nextStatus;
+        current.progress = progress;
+        current.updatedAt = new Date().toISOString();
+        plans[index] = current;
+
+        client.workoutPlans = plans;
+        await client.save();
+        res.json({ workoutPlan: current, workoutPlans: plans });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/clients/:id/workout-schedules', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+    try {
+        const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
+        if (!client) return res.status(404).json({ message: 'Client not found' });
+        const healthEnabled = await getFacilityHealthFeature(req.user.facilityId);
+        if (!healthEnabled) {
+            return res.status(403).json({ message: 'Health profile is disabled for this facility.' });
+        }
+
+        const { name, days, notes, offDays, startDate, endDate } = req.body || {};
+        if (!name || !Array.isArray(days) || days.length === 0) {
+            return res.status(400).json({ message: 'Schedule name and workout days are required.' });
+        }
+
+        const normalizedDays = days.map((d, index) => ({
+            dayNumber: Number(d.dayNumber || (index + 1)),
+            focus: (d.focus || `Day ${index + 1}`).toString().trim(),
+            exercises: Array.isArray(d.exercises)
+                ? d.exercises.map((ex) => ({
+                    name: (ex.name || '').toString().trim(),
+                    sets: toNullableNumber(ex.sets),
+                    reps: (ex.reps || '').toString().trim(),
+                    weight: toNullableNumber(ex.weight),
+                    setsReps: (ex.setsReps || '').toString().trim()
+                })).filter((ex) => ex.name)
+                : []
+        }));
+
+        const profile = getHealthState(client);
+        if (profile.currentSchedule) {
+            const archived = {
+                ...profile.currentSchedule,
+                status: 'archived',
+                endedAt: new Date().toISOString()
+            };
+            profile.pastSchedules.unshift(archived);
+        }
+
+        const schedule = {
+            id: `ws_${Date.now()}_${Math.floor(Math.random() * 100000)}`,
+            name: name.toString().trim(),
+            notes: (notes || '').toString().trim(),
+            offDays: Array.isArray(offDays) && offDays.length
+                ? offDays.map((d) => d.toString().toLowerCase())
+                : ['sunday'],
+            days: normalizedDays,
+            status: 'active',
+            startDate: toDateOnlyString(startDate || new Date()),
+            endDate: endDate ? toDateOnlyString(endDate) : null,
+            startedAt: new Date().toISOString(),
+            completedDays: []
+        };
+
+        profile.currentSchedule = schedule;
+        profile.updatedAt = new Date().toISOString();
+        client.healthProfile = profile;
+        await client.save();
+
+        res.json({ currentSchedule: schedule, pastSchedules: profile.pastSchedules });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/clients/:id/workout-schedules/:scheduleId/day-log', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+    try {
+        const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
+        if (!client) return res.status(404).json({ message: 'Client not found' });
+        const healthEnabled = await getFacilityHealthFeature(req.user.facilityId);
+        if (!healthEnabled) {
+            return res.status(403).json({ message: 'Health profile is disabled for this facility.' });
+        }
+
+        const { dayNumber, status, date, note, cardioMinutes } = req.body || {};
+        const allowedStatus = ['done', 'missed', 'cardio', 'off_day'];
+        const logStatus = allowedStatus.includes(status) ? status : 'done';
+        const logDate = toDateOnlyString(date || new Date());
+        if (!logDate) {
+            return res.status(400).json({ message: 'Valid date is required.' });
+        }
+
+        const profile = getHealthState(client);
+        const schedule = profile.currentSchedule;
+        if (!schedule || schedule.id !== req.params.scheduleId) {
+            return res.status(404).json({ message: 'Active workout schedule not found.' });
+        }
+
+        const assigned = assignedWorkoutDayForDate(schedule, logDate);
+        const resolvedDayNumber = Number(dayNumber || 0) > 0
+            ? Number(dayNumber)
+            : (assigned?.dayNumber ?? null);
+
+        const entry = {
+            id: `wlog_${Date.now()}_${Math.floor(Math.random() * 100000)}`,
+            date: logDate,
+            scheduleId: schedule.id,
+            dayNumber: resolvedDayNumber,
+            status: logStatus,
+            note: (note || '').toString().trim(),
+            cardioMinutes: toNullableNumber(cardioMinutes),
+            createdBy: req.user.id,
+            createdAt: new Date().toISOString()
+        };
+
+        profile.workoutCalendar.unshift(entry);
+        if (logStatus === 'done' && entry.dayNumber != null) {
+            const done = Array.isArray(schedule.completedDays) ? [...schedule.completedDays] : [];
+            if (!done.includes(entry.dayNumber)) done.push(entry.dayNumber);
+            schedule.completedDays = done;
+        }
+        profile.currentSchedule = { ...schedule, updatedAt: new Date().toISOString() };
+        profile.updatedAt = new Date().toISOString();
+        client.healthProfile = profile;
+        await client.save();
+
+        res.json({
+            workoutCalendar: profile.workoutCalendar,
+            currentSchedule: profile.currentSchedule,
+            dashboard: computeHealthDashboard(profile)
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/clients/:id/weekly-weight', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+    try {
+        const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
+        if (!client) return res.status(404).json({ message: 'Client not found' });
+        const healthEnabled = await getFacilityHealthFeature(req.user.facilityId);
+        if (!healthEnabled) {
+            return res.status(403).json({ message: 'Health profile is disabled for this facility.' });
+        }
+
+        const { date, weight } = req.body || {};
+        const logDate = toDateOnlyString(date || new Date());
+        const numericWeight = toNullableNumber(weight);
+        if (!logDate || numericWeight == null) {
+            return res.status(400).json({ message: 'Valid date and weight are required.' });
+        }
+
+        const profile = getHealthState(client);
+        profile.weeklyWeights.unshift({
+            date: logDate,
+            weight: numericWeight,
+            by: req.user.id,
+            createdAt: new Date().toISOString()
+        });
+        profile.currentWeight = numericWeight;
+        profile.updatedAt = new Date().toISOString();
+        client.healthProfile = profile;
+        await client.save();
+
+        res.json({
+            weeklyWeights: profile.weeklyWeights,
+            currentWeight: profile.currentWeight,
+            dashboard: computeHealthDashboard(profile)
+        });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
