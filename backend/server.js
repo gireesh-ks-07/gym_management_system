@@ -43,7 +43,24 @@ const authLimiter = rateLimit({
     message: { message: 'Too many login attempts. Please try again after 15 minutes.' }
 });
 
-app.use(cors());
+// Environment-aware CORS — restrict origins in production
+const PRODUCTION_ORIGIN = process.env.ALLOWED_ORIGIN || 'https://facilityapis.mobilemonks.in';
+const allowedOrigins = process.env.NODE_ENV === 'production'
+    ? [PRODUCTION_ORIGIN]
+    : [PRODUCTION_ORIGIN, 'http://localhost:5173', 'http://localhost:3001', 'http://localhost:3000'];
+
+app.use(cors({
+    origin: (origin, callback) => {
+        // Allow requests with no origin (curl, Postman, mobile apps)
+        if (!origin) return callback(null, true);
+        if (allowedOrigins.includes(origin)) return callback(null, true);
+        callback(new Error(`CORS: Origin '${origin}' not allowed`));
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
 app.use(bodyParser.json({
     verify: (req, res, buf) => {
         req.rawBody = buf?.toString('utf8') || '';
