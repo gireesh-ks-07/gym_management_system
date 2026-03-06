@@ -135,43 +135,62 @@ const SubscriptionPlans = () => {
                 </button>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '2rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1.5rem' }}>
                 {filteredPlans.map((plan, index) => (
                     <div className="card" key={plan.id} style={{
-                        padding: '2rem',
+                        padding: '0',
                         display: 'flex',
                         flexDirection: 'column',
                         position: 'relative',
-                        borderTop: `4px solid ${index % 2 === 0 ? 'var(--primary)' : 'var(--accent-purple)'}`,
-                        animationDelay: `${index * 0.1}s`
+                        borderRadius: '20px',
+                        overflow: 'hidden',
+                        border: '1px solid var(--border-color)',
+                        boxShadow: 'var(--shadow-md)',
+                        animationDelay: `${index * 0.1}s`,
+                        minHeight: '360px'
                     }}>
-                        <div style={{ marginBottom: '1.5rem' }}>
-                            <h3 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '0.5rem', color: 'var(--text-highlight)' }}>{plan.name}</h3>
-                            <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.25rem' }}>
-                                <span style={{ fontSize: '2.5rem', fontWeight: '800', color: 'var(--text-highlight)' }}>₹{plan.price}</span>
-                                <span style={{ fontSize: '1rem', color: 'var(--text-secondary)' }}>/ {plan.duration} mo</span>
+                        <div style={{
+                            height: '6px',
+                            background: index % 2 === 0
+                                ? 'linear-gradient(90deg, var(--primary), var(--primary-light))'
+                                : 'linear-gradient(90deg, #8B5CF6, #A78BFA)'
+                        }}></div>
+
+                        <div style={{ padding: '1.5rem', flex: 1, display: 'flex', flexDirection: 'column' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
+                                <h3 style={{ fontSize: '1.25rem', fontWeight: '800', color: 'var(--text-highlight)', letterSpacing: '-0.01em' }}>{plan.name}</h3>
+                                <ActionMenu
+                                    onEdit={() => handleEditClick(plan)}
+                                    onDelete={() => handleDeleteClick(plan.id)}
+                                />
                             </div>
-                        </div>
 
-                        <div style={{ position: 'absolute', top: '1rem', right: '0.5rem' }}>
-                            <ActionMenu
-                                onEdit={() => handleEditClick(plan)}
-                                onDelete={() => handleDeleteClick(plan.id)}
-                            />
-                        </div>
-
-                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', marginBottom: '2rem', lineHeight: '1.6', flex: 1 }}>
-                            {plan.description || 'No description provided.'}
-                        </p>
-
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1rem' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '0.9rem', color: 'var(--text-main)' }}>
-                                <CheckCircle size={16} color="var(--primary)" />
-                                <span>Up to {plan.maxMembers || 'Unlimited'} Members</span>
+                            <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.3rem', marginBottom: '0.75rem' }}>
+                                <span style={{ fontSize: '1.75rem', fontWeight: '900', color: 'var(--text-highlight)', letterSpacing: '-0.02em' }}>₹{plan.price}</span>
+                                <span style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', fontWeight: '600' }}>/ {plan.duration} mo</span>
                             </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '0.9rem', color: 'var(--text-main)' }}>
-                                <CheckCircle size={16} color="var(--primary)" />
-                                <span>Up to {plan.maxStaff || 'Unlimited'} Staff</span>
+
+                            <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1.5rem', lineHeight: '1.5', flex: 1 }}>
+                                {plan.description || 'No description provided.'}
+                            </p>
+
+                            <div style={{
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '0.75rem',
+                                padding: '1rem',
+                                background: 'var(--bg-body)',
+                                borderRadius: '16px',
+                                border: '1px solid var(--border-color)'
+                            }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontSize: '0.85rem', color: 'var(--text-main)', fontWeight: '600' }}>
+                                    <CheckCircle size={16} color="var(--primary)" />
+                                    <span>Up to {plan.maxMembers || 'Unlimited'} Members</span>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontSize: '0.85rem', color: 'var(--text-main)', fontWeight: '600' }}>
+                                    <CheckCircle size={16} color="var(--primary)" />
+                                    <span>Up to {plan.maxStaff || 'Unlimited'} Staff</span>
+                                </div>
                             </div>
                         </div>
                     </div>

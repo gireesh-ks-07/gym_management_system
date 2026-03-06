@@ -7,6 +7,7 @@ const api = axios.create({
     baseURL,
 });
 
+// --- Request Interceptor: Attach JWT token ---
 api.interceptors.request.use((config) => {
     // Automatically prefix with /api if missing
     if (config.url && config.url.startsWith('/') && !config.url.startsWith('/api/')) {
@@ -14,11 +15,26 @@ api.interceptors.request.use((config) => {
     }
 
     const token = localStorage.getItem('token');
-    console.log('API Request Interceptor - URL:', config.url, 'Token:', token ? 'Found' : 'Missing');
     if (token) {
         config.headers.Authorization = `Bearer ${token}`;
     }
     return config;
 });
 
+// --- Response Interceptor: Handle expired/invalid tokens ---
+api.interceptors.response.use(
+    (response) => response,
+    (error) => {
+        const status = error.response?.status;
+        // 401 = token missing/invalid — clear session and redirect to login
+        if (status === 401) {
+            localStorage.removeItem('token');
+            localStorage.removeItem('user');
+            window.location.href = '/login';
+        }
+        return Promise.reject(error);
+    }
+);
+
 export default api;
+

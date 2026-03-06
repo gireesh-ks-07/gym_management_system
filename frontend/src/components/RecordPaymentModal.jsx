@@ -78,7 +78,7 @@ const RecordPaymentModal = ({ isOpen, onClose, clients, preSelectedClientId = ''
                             display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer', padding: '1rem',
                             border: formData.method === 'cash' ? '2px solid var(--primary)' : '1px solid var(--border-color)',
                             borderRadius: 'var(--radius-sm)', flex: 1,
-                            background: formData.method === 'cash' ? 'rgba(34, 197, 94, 0.1)' : 'rgba(255,255,255,0.02)',
+                            background: formData.method === 'cash' ? 'rgba(16, 185, 129, 0.1)' : 'var(--bg-body)',
                             color: formData.method === 'cash' ? 'var(--primary)' : 'var(--text-secondary)',
                             transition: 'all 0.2s'
                         }}>
@@ -89,7 +89,7 @@ const RecordPaymentModal = ({ isOpen, onClose, clients, preSelectedClientId = ''
                             display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer', padding: '1rem',
                             border: formData.method === 'upi' ? '2px solid var(--accent-purple)' : '1px solid var(--border-color)',
                             borderRadius: 'var(--radius-sm)', flex: 1,
-                            background: formData.method === 'upi' ? 'rgba(139, 92, 246, 0.1)' : 'rgba(255,255,255,0.02)',
+                            background: formData.method === 'upi' ? 'rgba(139, 92, 246, 0.1)' : 'var(--bg-body)',
                             color: formData.method === 'upi' ? 'var(--accent-purple)' : 'var(--text-secondary)',
                             transition: 'all 0.2s'
                         }}>

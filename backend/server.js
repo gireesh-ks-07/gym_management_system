@@ -1,19 +1,47 @@
+// Load environment variables FIRST — before any module that reads process.env
+require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const cron = require('node-cron');
+const Joi = require('joi');
 const { sequelize, User, Facility, Client, Plan, Payment, SubscriptionPlan, Attendance, Notification, FacilityType, FacilityAutoPayEvent } = require('./models');
 const { Op } = require('sequelize');
 
 const app = express();
-const PORT = 3000;
-const SECRET_KEY = 'supersecretkey'; // Use env variable in production
+const PORT = process.env.PORT || 3000;
+
+// --- CRITICAL: Read SECRET_KEY from environment variable ---
+const SECRET_KEY = process.env.SECRET_KEY;
+if (!SECRET_KEY) {
+    console.error('[FATAL] SECRET_KEY is not set in environment variables. Server cannot start.');
+    process.exit(1);
+}
+
 const RAZORPAY_BASE_URL = 'https://api.razorpay.com/v1';
 const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || '';
 const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || '';
 const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET || '';
+
+// --- Security Headers ---
+app.use(helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' }
+}));
+
+// --- Rate Limiter for Auth Endpoints ---
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 10, // max 10 login attempts per window per IP
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { message: 'Too many login attempts. Please try again after 15 minutes.' }
+});
 
 app.use(cors());
 app.use(bodyParser.json({
@@ -22,9 +50,12 @@ app.use(bodyParser.json({
     }
 }));
 
-// Logger for all requests
+// Logger for all requests (only in non-production to avoid log noise)
+const LOG_REQUESTS = process.env.NODE_ENV !== 'production';
 app.use((req, res, next) => {
-    console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+    if (LOG_REQUESTS) {
+        console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+    }
     next();
 });
 
@@ -32,14 +63,13 @@ app.use((req, res, next) => {
 const authenticate = (req, res, next) => {
     const authHeader = req.headers['authorization'];
     if (!authHeader) {
-        console.log(`[AUTH] No token for ${req.path}`);
         return res.status(401).json({ message: 'No token provided' });
     }
     const token = authHeader.split(' ')[1];
     jwt.verify(token, SECRET_KEY, (err, user) => {
         if (err) {
-            console.log(`[AUTH] Invalid token for ${req.path}: ${err.message}`);
-            return res.status(403).json({ message: 'Forbidden' });
+            // Return 401 so the frontend interceptor can catch it and redirect to login
+            return res.status(401).json({ message: 'Invalid or expired token' });
         }
         req.user = user;
         next();
@@ -113,6 +143,12 @@ const toNullableNumber = (value) => {
     if (value === null || value === undefined || value === '') return null;
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : null;
+};
+
+const normalizeFacilitySubscriptionStatus = (status) => {
+    const normalized = String(status || '').trim().toLowerCase();
+    if (['active', 'pending', 'blocked', 'suspended', 'expired'].includes(normalized)) return normalized;
+    return null;
 };
 
 const sanitizeHealthProfile = (payload = {}) => {
@@ -631,19 +667,27 @@ const checkSubscriptionStatus = async (req, res, next) => {
 // --- AUTH ROUTES ---
 
 app.post('/api/auth/register', async (req, res) => {
-    // Only for initial setup or specific use case. 
-    // In a real app, only Superadmin creates Admins, and Admins create Staff.
+    // Only for initial setup. In production, superadmin creates admins, admins create staff.
     try {
         const { name, email, password, role, facilityId } = req.body;
-        const hashedPassword = await bcrypt.hash(password, 10);
-        const user = await User.create({ name, email, password: hashedPassword, role, facilityId });
+        // No manual bcrypt.hash — User model beforeCreate hook handles hashing
+        const user = await User.create({ name, email, password, role, facilityId });
         res.json({ message: 'User registered successfully', user });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
-app.post('/api/auth/login', async (req, res) => {
+// Joi validation schemas
+const loginSchema = Joi.object({
+    email: Joi.string().email().required(),
+    password: Joi.string().min(1).required()
+});
+
+app.post('/api/auth/login', authLimiter, async (req, res) => {
+    const { error } = loginSchema.validate(req.body);
+    if (error) return res.status(400).json({ message: error.details[0].message });
+
     try {
         const { email, password } = req.body;
         const user = await User.findOne({ where: { email } });
@@ -793,15 +837,45 @@ app.post('/api/facilities', authenticate, authorize(['superadmin']), async (req,
         const plan = await SubscriptionPlan.findByPk(planId);
         if (!plan) return res.status(404).json({ message: 'Subscription plan not found' });
 
-        const facility = await Facility.create({
-            name,
-            type: type || 'gym',
-            address,
-            subscriptionPlanId: planId,
-            subscriptionExpiresAt: null,
-            subscriptionStatus: 'pending',
-            facilityTypeId: facilityTypeId || null,
-            healthProfileEnabled: Boolean(healthProfileEnabled)
+        if (facilityTypeId) {
+            const facilityType = await FacilityType.findByPk(facilityTypeId);
+            if (!facilityType) {
+                return res.status(404).json({ message: 'Facility type not found' });
+            }
+        }
+
+        if (adminEmail) {
+            const existingAdminEmail = await User.findOne({ where: { email: adminEmail } });
+            if (existingAdminEmail) {
+                return res.status(409).json({ message: 'Admin email already exists. Please use a different email.' });
+            }
+        }
+
+        const facility = await sequelize.transaction(async (transaction) => {
+            const createdFacility = await Facility.create({
+                name,
+                type: type || 'gym',
+                address,
+                subscriptionPlanId: planId,
+                subscriptionExpiresAt: null,
+                subscriptionStatus: 'pending',
+                facilityTypeId: facilityTypeId || null,
+                healthProfileEnabled: Boolean(healthProfileEnabled)
+            }, { transaction });
+
+            // Create initial admin for the facility
+            if (adminEmail && adminPassword) {
+                // No manual bcrypt.hash — User model beforeCreate hook handles hashing
+                await User.create({
+                    name: adminName || 'Admin',
+                    email: adminEmail,
+                    password: adminPassword,
+                    role: 'admin',
+                    facilityId: createdFacility.id
+                }, { transaction });
+            }
+
+            return createdFacility;
         });
 
         // Add Notification for Super Admin
@@ -811,18 +885,6 @@ app.post('/api/facilities', authenticate, authorize(['superadmin']), async (req,
             role: 'superadmin',
             path: '/facilities'
         });
-
-        // Create initial admin for the facility
-        if (adminEmail && adminPassword) {
-            const hashedPassword = await bcrypt.hash(adminPassword, 10);
-            await User.create({
-                name: adminName || 'Admin',
-                email: adminEmail,
-                password: hashedPassword,
-                role: 'admin',
-                facilityId: facility.id
-            });
-        }
 
         res.json(facility);
     } catch (error) {
@@ -842,32 +904,60 @@ app.get('/api/facilities', authenticate, authorize(['superadmin']), async (req, 
 
         // Auto-update expiry status on list view
         const now = new Date();
+        const expiredIds = [];
         for (const facility of facilities) {
             if (facility.subscriptionStatus === 'active' && facility.subscriptionExpiresAt && new Date(facility.subscriptionExpiresAt) < now) {
                 facility.subscriptionStatus = 'expired';
-                await facility.save();
+                expiredIds.push(facility.id);
             }
         }
+        // Batch-update expired facilities instead of saving one by one
+        if (expiredIds.length > 0) {
+            await Facility.update({ subscriptionStatus: 'expired' }, { where: { id: { [Op.in]: expiredIds } } });
+        }
 
-        const facilitiesWithUserDetails = await Promise.all(
-            facilities.map(async (facility) => {
-                const [adminCount, staffCount, memberCount] = await Promise.all([
-                    User.count({ where: { facilityId: facility.id, role: 'admin' } }),
-                    User.count({ where: { facilityId: facility.id, role: 'staff' } }),
-                    Client.count({ where: { facilityId: facility.id } })
-                ]);
+        // --- FIX: Replace N+1 queries with 2 batch aggregation queries ---
+        const facilityIds = facilities.map(f => f.id);
 
-                return {
-                    ...facility.toJSON(),
-                    userDetails: {
-                        totalUsers: adminCount + staffCount,
-                        adminCount,
-                        staffCount,
-                        memberCount
-                    }
-                };
+        const [userCounts, memberCounts] = await Promise.all([
+            User.findAll({
+                attributes: ['facilityId', 'role', [sequelize.fn('COUNT', sequelize.col('id')), 'count']],
+                where: { facilityId: { [Op.in]: facilityIds }, role: { [Op.in]: ['admin', 'staff'] } },
+                group: ['facilityId', 'role'],
+                raw: true
+            }),
+            Client.findAll({
+                attributes: ['facilityId', [sequelize.fn('COUNT', sequelize.col('id')), 'count']],
+                where: { facilityId: { [Op.in]: facilityIds } },
+                group: ['facilityId'],
+                raw: true
             })
-        );
+        ]);
+
+        // Build lookup maps for O(1) access
+        const adminCountMap = {};
+        const staffCountMap = {};
+        userCounts.forEach(row => {
+            if (row.role === 'admin') adminCountMap[row.facilityId] = parseInt(row.count, 10);
+            if (row.role === 'staff') staffCountMap[row.facilityId] = parseInt(row.count, 10);
+        });
+        const memberCountMap = {};
+        memberCounts.forEach(row => { memberCountMap[row.facilityId] = parseInt(row.count, 10); });
+
+        const facilitiesWithUserDetails = facilities.map(facility => {
+            const adminCount = adminCountMap[facility.id] || 0;
+            const staffCount = staffCountMap[facility.id] || 0;
+            const memberCount = memberCountMap[facility.id] || 0;
+            return {
+                ...facility.toJSON(),
+                userDetails: {
+                    totalUsers: adminCount + staffCount,
+                    adminCount,
+                    staffCount,
+                    memberCount
+                }
+            };
+        });
 
         res.json(facilitiesWithUserDetails);
     } catch (error) {
@@ -913,19 +1003,19 @@ app.post('/api/facilities/:id/status', authenticate, authorize(['superadmin']), 
         const facility = await Facility.findByPk(req.params.id);
         if (!facility) return res.status(404).json({ message: 'Facility not found' });
 
-        const allowed = ['active', 'pending', 'blocked', 'suspended', 'expired'];
-        if (!allowed.includes(status)) {
+        const normalizedStatus = normalizeFacilitySubscriptionStatus(status);
+        if (!normalizedStatus) {
             return res.status(400).json({ message: 'Invalid subscription status' });
         }
 
         // If super admin moves facility away from active, revoke current AutoPay
         // so status doesn't auto-sync back to active from an existing Razorpay subscription.
-        if (status !== 'active' && facility.razorpaySubscriptionId) {
-            await revokeFacilityAutoPay(facility, `Subscription manually set to ${status} by super admin`);
+        if (normalizedStatus !== 'active' && facility.razorpaySubscriptionId) {
+            await revokeFacilityAutoPay(facility, `Subscription manually set to ${normalizedStatus} by super admin`);
         }
 
-        facility.subscriptionStatus = status;
-        if (status !== 'active') {
+        facility.subscriptionStatus = normalizedStatus;
+        if (normalizedStatus !== 'active') {
             facility.subscriptionExpiresAt = null;
         }
         await facility.save();
@@ -945,8 +1035,8 @@ app.post('/api/facilities/:id/reset-password', authenticate, authorize(['superad
         const admin = await User.findOne({ where: { facilityId: req.params.id, role: 'admin' } });
         if (!admin) return res.status(404).json({ message: 'Admin user not found for this facility' });
 
-        const hashedPassword = await bcrypt.hash(newPassword, 10);
-        admin.password = hashedPassword;
+        // Assign plain text — User model beforeUpdate hook hashes it automatically
+        admin.password = newPassword;
         await admin.save();
 
         res.json({ message: 'Password reset successfully' });
@@ -962,16 +1052,16 @@ app.post('/api/facilities/:id/subscription-update', authenticate, authorize(['su
         if (!facility) return res.status(404).json({ message: 'Facility not found' });
 
         if (status) {
-            const allowed = ['active', 'pending', 'blocked', 'suspended', 'expired'];
-            if (!allowed.includes(status)) {
+            const normalizedStatus = normalizeFacilitySubscriptionStatus(status);
+            if (!normalizedStatus) {
                 return res.status(400).json({ message: 'Invalid subscription status' });
             }
 
-            if (status !== 'active' && facility.razorpaySubscriptionId) {
-                await revokeFacilityAutoPay(facility, `Subscription manually set to ${status} by super admin`);
+            if (normalizedStatus !== 'active' && facility.razorpaySubscriptionId) {
+                await revokeFacilityAutoPay(facility, `Subscription manually set to ${normalizedStatus} by super admin`);
             }
-            facility.subscriptionStatus = status;
-            if (status !== 'active') {
+            facility.subscriptionStatus = normalizedStatus;
+            if (normalizedStatus !== 'active') {
                 facility.subscriptionExpiresAt = null;
             }
         }
@@ -1065,6 +1155,12 @@ app.get('/api/superadmin/dashboard', authenticate, authorize(['superadmin']), as
 // Endpoint for Facility Admin to check their own subscription
 app.get('/api/facility/subscription', authenticate, async (req, res) => {
     try {
+        if (req.user.role === 'superadmin') {
+            return res.json({
+                roleScope: 'platform',
+                subscriptionStatus: 'active'
+            });
+        }
         if (!req.user.facilityId) return res.status(400).json({ message: 'No facility associated' });
         const facility = await Facility.findByPk(req.user.facilityId, { include: [SubscriptionPlan, FacilityType] });
         if (facility) {
@@ -1418,11 +1514,11 @@ app.post('/api/staff', authenticate, checkSubscriptionStatus, authorize(['admin'
             }
         }
 
-        const hashedPassword = await bcrypt.hash(password, 10);
+        // No manual bcrypt.hash — User model beforeCreate hook handles hashing
         const staff = await User.create({
             name,
             email,
-            password: hashedPassword,
+            password,
             role: 'staff',
             facilityId: req.user.facilityId
         });
@@ -1500,8 +1596,7 @@ app.get('/api/dashboard', authenticate, authorize(['admin', 'staff', 'superadmin
         const facilityId = req.user.facilityId;
         const now = new Date();
 
-        // 0. Auto-update statuses for expired plans
-        await syncClientPlanStatuses(facilityId);
+        // 0. Auto-update statuses for expired plans - now handled by cron, skip inline sync
 
         // 1. Total Active Clients
         const totalClients = await Client.count({ where: { facilityId } });
@@ -1631,18 +1726,27 @@ app.post('/api/payments', authenticate, checkSubscriptionStatus, authorize(['adm
     }
 });
 
-// Update GET /api/clients to check expiry
+// GET /api/clients — syncClientPlanStatuses moved to hourly cron (see bottom of file)
 app.get('/api/clients', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff', 'superadmin']), async (req, res) => {
     try {
         let where = {};
         if (req.user.role !== 'superadmin') {
             where.facilityId = req.user.facilityId;
         }
+        // Pagination support (default: all, capped at 500 for safety)
+        const page = parseInt(req.query.page) || null;
+        const limit = Math.min(parseInt(req.query.limit) || 500, 500);
+        const offset = page ? (page - 1) * limit : 0;
 
-        await syncClientPlanStatuses(req.user.role === 'superadmin' ? null : req.user.facilityId);
+        const queryOptions = { where, include: [Plan], order: [['createdAt', 'DESC']], limit, offset };
 
-        const clients = await Client.findAll({ where, include: [Plan] });
-        res.json(clients);
+        if (page) {
+            const { rows, count } = await Client.findAndCountAll(queryOptions);
+            res.json({ data: rows, total: count, page, pages: Math.ceil(count / limit), limit });
+        } else {
+            const clients = await Client.findAll(queryOptions);
+            res.json(clients);
+        }
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -1668,39 +1772,60 @@ app.get('/api/reports', authenticate, checkSubscriptionStatus, authorize(['admin
     try {
         const facilityId = req.user.facilityId;
         const clientWhere = facilityId ? { facilityId } : {};
-
-        // Plan Distribution
-        const plans = await Plan.findAll({ where: clientWhere });
-        const planStats = await Promise.all(plans.map(async (plan) => {
-            const count = await Client.count({ where: { ...clientWhere, planId: plan.id } });
-            return { name: plan.name, count };
-        }));
-
-        // Payment Stats
         const updatedWhere = facilityId ? { facilityId } : {};
-        const payments = await Payment.findAll({
-            where: updatedWhere,
-            order: [['date', 'DESC']],
-            limit: 10,
-            include: [{ model: Client, attributes: ['name'] }]
-        });
 
-        const allPayments = await Payment.findAll({ where: updatedWhere });
+        // Plan Distribution — use DB-level aggregation instead of N+1 counting
+        const plans = await Plan.findAll({ where: clientWhere });
+        const planIds = plans.map(p => p.id);
+        const clientPlanCounts = await Client.findAll({
+            attributes: ['planId', [sequelize.fn('COUNT', sequelize.col('id')), 'count']],
+            where: { ...clientWhere, planId: { [Op.in]: planIds } },
+            group: ['planId'],
+            raw: true
+        });
+        const planCountMap = {};
+        clientPlanCounts.forEach(r => { planCountMap[r.planId] = parseInt(r.count, 10); });
+        const planStats = plans.map(plan => ({ name: plan.name, count: planCountMap[plan.id] || 0 }));
+
+        // Payment Stats — FIX: single query for revenue aggregation instead of fetching all rows
+        const [payments, revenueAgg] = await Promise.all([
+            Payment.findAll({
+                where: updatedWhere,
+                order: [['date', 'DESC']],
+                limit: 10,
+                include: [{ model: Client, attributes: ['name'] }]
+            }),
+            Payment.findAll({
+                attributes: [
+                    'method',
+                    [sequelize.fn('SUM', sequelize.col('amount')), 'total']
+                ],
+                where: updatedWhere,
+                group: ['method'],
+                raw: true
+            })
+        ]);
+
         const revenue = { total: 0, cash: 0, upi: 0 };
-        allPayments.forEach(p => {
-            revenue.total += p.amount;
-            if (p.method === 'cash') revenue.cash += p.amount;
-            if (p.method === 'upi') revenue.upi += p.amount;
+        revenueAgg.forEach(row => {
+            const amt = parseFloat(row.total) || 0;
+            revenue.total += amt;
+            if (row.method === 'cash') revenue.cash = amt;
+            if (row.method === 'upi') revenue.upi = amt;
         });
 
+        // Gender Stats — use DB-level aggregation
         let genderStats = null;
         if (req.user.role !== 'superadmin') {
-            const clients = await Client.findAll({ where: clientWhere, attributes: ['gender'] });
+            const genderCounts = await Client.findAll({
+                attributes: ['gender', [sequelize.fn('COUNT', sequelize.col('id')), 'count']],
+                where: clientWhere,
+                group: ['gender'],
+                raw: true
+            });
             genderStats = { male: 0, female: 0, other: 0 };
-            clients.forEach(c => {
-                if (genderStats[c.gender] !== undefined) {
-                    genderStats[c.gender] += 1;
-                }
+            genderCounts.forEach(row => {
+                if (genderStats[row.gender] !== undefined) genderStats[row.gender] = parseInt(row.count, 10);
             });
         }
 
@@ -1713,9 +1838,7 @@ app.get('/api/reports', authenticate, checkSubscriptionStatus, authorize(['admin
             include: [{ model: SubscriptionPlan }]
         });
 
-        const autopayEventWhere = req.user.role === 'superadmin'
-            ? {}
-            : { facilityId };
+        const autopayEventWhere = req.user.role === 'superadmin' ? {} : { facilityId };
 
         const autopayPayments = FacilityAutoPayEvent
             ? await FacilityAutoPayEvent.findAll({
@@ -2216,6 +2339,14 @@ app.post('/api/clients/:id/workout-schedules/:scheduleId/day-log', authenticate,
             ? Number(dayNumber)
             : (assigned?.dayNumber ?? null);
 
+        const existingIndex = profile.workoutCalendar.findIndex((log) => (
+            log?.scheduleId === schedule.id && log?.date === logDate
+        ));
+        const existingEntry = existingIndex >= 0 ? profile.workoutCalendar[existingIndex] : null;
+        if (existingIndex >= 0) {
+            profile.workoutCalendar.splice(existingIndex, 1);
+        }
+
         const entry = {
             id: `wlog_${Date.now()}_${Math.floor(Math.random() * 100000)}`,
             date: logDate,
@@ -2225,15 +2356,18 @@ app.post('/api/clients/:id/workout-schedules/:scheduleId/day-log', authenticate,
             note: (note || '').toString().trim(),
             cardioMinutes: toNullableNumber(cardioMinutes),
             createdBy: req.user.id,
-            createdAt: new Date().toISOString()
+            createdAt: existingEntry?.createdAt || new Date().toISOString(),
+            updatedAt: new Date().toISOString()
         };
 
         profile.workoutCalendar.unshift(entry);
-        if (logStatus === 'done' && entry.dayNumber != null) {
-            const done = Array.isArray(schedule.completedDays) ? [...schedule.completedDays] : [];
-            if (!done.includes(entry.dayNumber)) done.push(entry.dayNumber);
-            schedule.completedDays = done;
-        }
+        const completedDays = Array.from(new Set(
+            profile.workoutCalendar
+                .filter((log) => log?.scheduleId === schedule.id && log?.status === 'done' && log?.dayNumber != null)
+                .map((log) => Number(log.dayNumber))
+                .filter((value) => Number.isFinite(value) && value > 0)
+        ));
+        schedule.completedDays = completedDays;
         profile.currentSchedule = { ...schedule, updatedAt: new Date().toISOString() };
         profile.updatedAt = new Date().toISOString();
         client.healthProfile = profile;
@@ -2383,18 +2517,83 @@ app.use((err, req, res, next) => {
     res.status(500).json({ message: 'Internal Server Error', error: err.message });
 });
 
-sequelize.sync({ alter: true }).then(async () => {
+// --- SCHEDULED CRON JOBS ---
+// Sync client plan statuses every hour (removes from API request path)
+cron.schedule('0 * * * *', async () => {
+    try {
+        await syncClientPlanStatuses(null); // sync all facilities
+        console.log('[CRON] Client plan statuses synced.');
+    } catch (err) {
+        console.error('[CRON] syncClientPlanStatuses error:', err.message);
+    }
+});
+
+// Every day at midnight: check for expiring/expired facility subscriptions and notify
+cron.schedule('0 0 * * *', async () => {
+    try {
+        const now = new Date();
+        const in7Days = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+        // Mark expired facilities
+        const expiredFacilities = await Facility.findAll({
+            where: { subscriptionStatus: 'active', subscriptionExpiresAt: { [Op.lt]: now } }
+        });
+        for (const f of expiredFacilities) {
+            f.subscriptionStatus = 'expired';
+            await f.save();
+        }
+
+        // Notify about expiring subscriptions
+        const expiringFacilities = await Facility.findAll({
+            where: { subscriptionStatus: 'active', subscriptionExpiresAt: { [Op.between]: [now, in7Days] } },
+            include: [{ model: SubscriptionPlan }]
+        });
+        for (const facility of expiringFacilities) {
+            const existing = await Notification.findOne({
+                where: { role: 'superadmin', message: { [Op.like]: `%${facility.name}%expiring%` }, createdAt: { [Op.gte]: new Date(now - 24 * 60 * 60 * 1000) } }
+            });
+            if (!existing) {
+                await Notification.create({
+                    message: `Facility "${facility.name}" subscription expiring on ${facility.subscriptionExpiresAt}.`,
+                    type: 'warning',
+                    role: 'superadmin',
+                    path: '/facilities'
+                });
+            }
+        }
+        console.log(`[CRON] Facility expiry check done. ${expiredFacilities.length} expired, ${expiringFacilities.length} expiring soon.`);
+    } catch (err) {
+        console.error('[CRON] Facility expiry check error:', err.message);
+    }
+});
+
+// Run initial client sync on startup
+(async () => {
+    try {
+        await syncClientPlanStatuses(null);
+    } catch (err) {
+        console.error('[STARTUP] Initial plan status sync failed:', err.message);
+    }
+})();
+
+const isProduction = process.env.NODE_ENV === 'production';
+// CRITICAL: Never run alter:true in production — can drop/modify columns
+sequelize.sync({ alter: !isProduction }).then(async () => {
     // Create default superadmin if not exists
     const superadmin = await User.findOne({ where: { role: 'superadmin' } });
     if (!superadmin) {
-        const hashedPassword = await bcrypt.hash('admin123', 10);
+        const defaultPassword = process.env.SUPERADMIN_DEFAULT_PASSWORD || 'admin123';
+        if (isProduction && defaultPassword === 'admin123') {
+            console.warn('[WARN] Using default superadmin password in production. Set SUPERADMIN_DEFAULT_PASSWORD in .env!');
+        }
+        // No manual bcrypt.hash — User model beforeCreate hook handles hashing
         await User.create({
             name: 'Super Admin',
-            email: 'super@admin.com',
-            password: hashedPassword,
+            email: process.env.SUPERADMIN_EMAIL || 'super@admin.com',
+            password: defaultPassword,
             role: 'superadmin'
         });
-        console.log('Superadmin created: super@admin.com / admin123');
+        console.log(`Superadmin created: ${process.env.SUPERADMIN_EMAIL || 'super@admin.com'}`);
     }
 
     // Seed some notifications for demo if none exist

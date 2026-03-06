@@ -26,15 +26,23 @@ export const AuthProvider = ({ children }) => {
     };
 
     useEffect(() => {
-        const storedUser = localStorage.getItem('user');
-        const token = localStorage.getItem('token');
+        try {
+            const storedUser = localStorage.getItem('user');
+            const token = localStorage.getItem('token');
 
-        if (storedUser && token) {
-            const parsedUser = JSON.parse(storedUser);
-            setUser(parsedUser);
-            refreshFacilitySubscription(parsedUser);
+            if (storedUser && token) {
+                const parsedUser = JSON.parse(storedUser);
+                setUser(parsedUser);
+                refreshFacilitySubscription(parsedUser);
+            }
+        } catch (e) {
+            // Corrupted localStorage — clear it and force re-login
+            console.warn('Corrupted auth storage, clearing.', e);
+            localStorage.removeItem('user');
+            localStorage.removeItem('token');
+        } finally {
+            setLoading(false);
         }
-        setLoading(false);
     }, []);
 
     const login = async (email, password) => {

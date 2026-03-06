@@ -1,45 +1,81 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Manrope:wght@500;600;700;800&display=swap');
+
 :root {
-  /* OpsMonks Official Color System - Graphite + Emerald */
+  /* Common Variables */
   --primary: #10B981;
   --primary-hover: #059669;
   --primary-light: #34D399;
   --primary-glow: rgba(16, 185, 129, 0.4);
 
-  --bg-body: #0F172A;
-  /* Dark Graphite */
-  --bg-sidebar: #0B1220;
-  /* Deep Graphite */
-  --bg-card: #1F2937;
-  /* Soft Graphite */
-  --bg-card-hover: #262f3f;
-
-  --text-main: #f8fafc;
-  --text-secondary: #9CA3AF;
-  /* Muted Gray */
-  --text-muted: #6B7280;
-  --text-highlight: #ffffff;
-
-  --border-color: #374151;
-  /* Subtle Gray */
-  --glass-border: #374151;
-
   --success: #10B981;
   --danger: #EF4444;
   --warning: #F59E0B;
+  --info: #3B82F6;
   --inactive: #6B7280;
 
   --radius-sm: 8px;
   --radius-md: 16px;
   --radius-lg: 24px;
+  --radius-full: 9999px;
 
-  /* Elevated Shadows (Subtle, no glow) */
+  --font-sans: 'Inter', 'Manrope', system-ui, -apple-system, sans-serif;
+  --font-display: 'Manrope', 'Inter', system-ui, sans-serif;
+
+  --transition-fast: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-base: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow: 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+[data-theme='dark'] {
+  --bg-body: #0F172A;
+  --bg-sidebar: #0B1220;
+  --bg-card: #1E293B;
+  --bg-card-hover: #262F3F;
+  --bg-input: rgba(15, 23, 42, 0.6);
+  --bg-input-focus: rgba(15, 23, 42, 0.8);
+  --bg-hover: rgba(255, 255, 255, 0.05);
+  --bg-active: #111827;
+
+  --text-main: #F8FAFC;
+  --text-secondary: #94A3B8;
+  --text-muted: #64748B;
+  --text-highlight: #FFFFFF;
+
+  --border-color: #334155;
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --glass-bg: rgba(30, 41, 59, 0.7);
+
   --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.5);
   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
   --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.6);
-  --shadow-glow: none;
 
-  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
-  --font-display: 'Inter', system-ui, sans-serif;
+  --gradient-dashboard: radial-gradient(circle at top right, #1F2937 0%, #0F172A 100%);
+}
+
+[data-theme='light'] {
+  --bg-body: #F1F5F9;
+  --bg-sidebar: #FFFFFF;
+  --bg-card: #FFFFFF;
+  --bg-card-hover: #F8FAFC;
+  --bg-input: #FFFFFF;
+  --bg-input-focus: #FFFFFF;
+  --bg-hover: #F1F5F9;
+  --bg-active: rgba(16, 185, 129, 0.1);
+
+  --text-main: #1E293B;
+  --text-secondary: #475569;
+  --text-muted: #94A3B8;
+  --text-highlight: #0F172A;
+
+  --border-color: #E2E8F0;
+  --glass-border: rgba(0, 0, 0, 0.1);
+  --glass-bg: #FFFFFF;
+
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+
+  --gradient-dashboard: linear-gradient(135deg, #F8FAFC 0%, #F1F5F9 100%);
 }
 
 * {
@@ -171,18 +207,19 @@ button {
 .input-field {
   width: 100%;
   padding: 0.75rem 1rem;
-  background: rgba(15, 23, 42, 0.6);
+  background: var(--bg-input);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   color: var(--text-main);
   font-size: 0.95rem;
   transition: all 0.2s;
+  box-shadow: var(--shadow-sm);
 }
 
 .input-field:focus {
   border-color: var(--primary);
-  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.2);
-  background: rgba(15, 23, 42, 0.8);
+  box-shadow: 0 0 0 2px var(--primary-glow);
+  background: var(--bg-input-focus);
 }
 
 .password-input-wrapper {
@@ -230,7 +267,7 @@ select.input-field {
 }
 
 select.input-field option {
-  background-color: #1e293b;
+  background-color: var(--bg-card);
   color: var(--text-main);
   padding: 10px;
 }
@@ -317,7 +354,8 @@ select.input-field option {
 .dashboard-layout {
   display: flex;
   min-height: 100vh;
-  background: radial-gradient(circle at top right, #1F2937 0%, #0F172A 100%);
+  background: var(--gradient-dashboard);
+  transition: background var(--transition-base);
 }
 
 .main-content {
@@ -344,7 +382,7 @@ select.input-field option {
   flex-direction: column;
   z-index: 50;
   padding: 2.5rem 1.5rem;
-  /* Increased top padding */
+  transition: all var(--transition-base);
 }
 
 .sidebar-brand {
@@ -376,7 +414,6 @@ select.input-field option {
   line-height: 1.1;
 }
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Manrope:wght@500;600;700;800&display=swap');
 
 .brand-caption {
   font-size: 0.65rem;
@@ -409,12 +446,12 @@ select.input-field option {
 
 .nav-item:hover {
   color: var(--text-main);
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--bg-hover);
 }
 
 .nav-item.active {
   color: var(--primary);
-  background: #111827;
+  background: var(--bg-active);
 }
 
 .nav-item.active::before {
@@ -433,36 +470,38 @@ select.input-field option {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 3rem;
-  /* Increased margin bottom */
-  padding: 1.5rem 0;
+  margin-bottom: 2.5rem;
+  padding: 1.25rem 0;
   border-bottom: 1px solid var(--border-color);
   position: sticky;
   top: 0;
   z-index: 40;
   background: var(--bg-body);
-  /* Stretch navbar to full width of main-content by offsetting parent padding */
   margin-left: -3rem;
   margin-right: -3rem;
   padding-left: 3rem;
   padding-right: 3rem;
+  transition: all var(--transition-base);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 
 .search-bar {
   display: flex;
   align-items: center;
-  background: rgba(30, 41, 59, 0.5);
+  background: var(--bg-input);
   border: 1px solid var(--border-color);
-  border-radius: 99px;
-  padding: 0.5rem 1rem;
-  width: 300px;
-  transition: all 0.2s;
+  border-radius: var(--radius-full);
+  padding: 0.6rem 1.25rem;
+  width: 350px;
+  transition: all var(--transition-fast);
+  box-shadow: var(--shadow-sm);
 }
 
 .search-bar:focus-within {
   border-color: var(--primary);
-  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.1);
-  background: rgba(30, 41, 59, 0.8);
+  box-shadow: 0 0 0 2px var(--primary-glow);
+  background: var(--bg-input-focus);
 }
 
 .search-input {
@@ -663,10 +702,11 @@ select.input-field option {
 
 /* Action Menu Popup */
 .action-menu-popup {
-  background: rgba(30, 41, 59, 0.95);
+  background: var(--glass-bg);
   backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
   padding: 0.5rem;
   display: flex;
@@ -678,18 +718,21 @@ select.input-field option {
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  padding: 0.6rem 1rem;
+  padding: 0.75rem 1rem;
   width: 100%;
   text-align: left;
   background: transparent;
+  border: none;
+  cursor: pointer;
   color: var(--text-main);
   font-size: 0.9rem;
-  border-radius: 4px;
+  font-weight: 500;
+  border-radius: 10px;
   transition: all 0.2s;
 }
 
 .action-menu-item:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--bg-hover);
 }
 
 .action-menu-item.delete {
@@ -705,7 +748,7 @@ select.input-field option {
 }
 
 .notification-item:hover {
-  background: rgba(255, 255, 255, 0.05) !important;
+  background: var(--bg-hover) !important;
 }
 
 /* Modal System */
@@ -724,12 +767,10 @@ select.input-field option {
 }
 
 .modal-content {
-  background: #1e293b;
-  /* Solid dark slate */
+  background: var(--bg-card);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
-  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-  /* Deep shadow */
+  box-shadow: var(--shadow-lg);
   width: 100%;
   max-width: 600px;
   max-height: 90vh;
@@ -800,13 +841,13 @@ select.input-field option {
 
 /* Health Profile Professional UI */
 .glass-panel {
-  background: rgba(30, 41, 59, 0.4);
+  background: var(--glass-bg);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--glass-border);
   border-radius: 24px;
   padding: 24px;
-  box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.2);
+  box-shadow: var(--shadow-md);
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   position: relative;
   overflow: hidden;
@@ -824,24 +865,33 @@ select.input-field option {
 
 .glass-panel:hover {
   transform: translateY(-2px);
-  box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.3);
-  border-color: rgba(255, 255, 255, 0.1);
-  background: rgba(30, 41, 59, 0.5);
+  box-shadow: var(--shadow-lg);
 }
 
 .metric-card {
-  background: rgba(255, 255, 255, 0.02);
-  border-radius: 20px;
-  padding: 20px;
-  border: 1px solid rgba(255, 255, 255, 0.03);
+  background: var(--bg-body);
+  border-radius: 16px;
+  padding: 1rem;
+  border: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
   transition: all 0.2s ease;
 }
 
 .metric-card:hover {
-  background: rgba(255, 255, 255, 0.04);
   transform: translateY(-2px);
+}
+
+.insight-card {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.1), rgba(16, 185, 129, 0.02));
+  border: 1px solid rgba(16, 185, 129, 0.2);
+  border-radius: 16px;
+  padding: 1rem;
+}
+
+[data-theme='dark'] .insight-card {
+  background: linear-gradient(135deg, rgba(88, 28, 135, 0.2), rgba(15, 23, 42, 0.6));
+  border: 1px solid rgba(167, 139, 250, 0.2);
 }
 
 .section-header {
@@ -899,8 +949,8 @@ select.input-field option {
   font-size: 0.9rem;
   font-weight: 600;
   color: var(--text-secondary);
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid transparent;
+  background: var(--bg-hover);
+  border: 1px solid var(--border-color);
   transition: all 0.2s;
   position: relative;
 }
@@ -933,15 +983,15 @@ select.input-field option {
   width: 80px;
   height: 80px;
   border-radius: 24px;
-  background: linear-gradient(135deg, var(--primary), var(--accent-blue, #3b82f6));
+  background: linear-gradient(135deg, var(--primary), var(--primary-light));
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 2rem;
   font-weight: 800;
   color: white;
-  box-shadow: 0 10px 20px rgba(16, 185, 129, 0.2);
-  border: 4px solid rgba(15, 23, 42, 0.5);
+  box-shadow: 0 10px 20px rgba(16, 185, 129, 0.3);
+  border: 4px solid var(--bg-card);
 }
 
 .toast-container {

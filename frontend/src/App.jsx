@@ -1,20 +1,25 @@
-import React from 'react';
+import React, { Suspense, lazy } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import Sidebar from './components/Sidebar';
 import Navbar from './components/Navbar';
-import Login from './pages/Login';
-import Facilities from './pages/Facilities';
-import Clients from './pages/Clients';
-import Staff from './pages/Staff';
-import Payments from './pages/Payments';
 import { ToastProvider } from './context/ToastContext';
-import Dashboard from './pages/Dashboard';
-import Reports from './pages/Reports';
-import Plans from './pages/Plans';
-import SubscriptionPlans from './pages/SubscriptionPlans';
-import FacilityTypes from './pages/FacilityTypes';
-import HealthProfile from './pages/HealthProfile';
+import { ThemeProvider } from './context/ThemeContext';
+
+// Eager-load Login (entry point, must be instant)
+import Login from './pages/Login';
+
+// Lazy-load all other pages for code splitting (reduces initial bundle)
+const Facilities = lazy(() => import('./pages/Facilities'));
+const Clients = lazy(() => import('./pages/Clients'));
+const Staff = lazy(() => import('./pages/Staff'));
+const Payments = lazy(() => import('./pages/Payments'));
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const Reports = lazy(() => import('./pages/Reports'));
+const Plans = lazy(() => import('./pages/Plans'));
+const SubscriptionPlans = lazy(() => import('./pages/SubscriptionPlans'));
+const FacilityTypes = lazy(() => import('./pages/FacilityTypes'));
+const HealthProfile = lazy(() => import('./pages/HealthProfile'));
 
 const Loader = () => (
   <div className="loader-container">
@@ -63,76 +68,80 @@ const ProtectedRoute = ({ children, roles }) => {
 
 const App = () => {
   return (
-    <ToastProvider>
-      <AuthProvider>
-        <Router>
-          <Routes>
-            <Route path="/login" element={<Login />} />
+    <ThemeProvider>
+      <ToastProvider>
+        <AuthProvider>
+          <Router>
+            <Suspense fallback={<Loader />}>
+              <Routes>
+                <Route path="/login" element={<Login />} />
 
-            <Route path="/" element={
-              <ProtectedRoute roles={['admin', 'staff', 'superadmin']}>
-                {/* Dashboard for everyone, content adapts inside */}
-                <Dashboard />
-              </ProtectedRoute>
-            } />
+                <Route path="/" element={
+                  <ProtectedRoute roles={['admin', 'staff', 'superadmin']}>
+                    {/* Dashboard for everyone, content adapts inside */}
+                    <Dashboard />
+                  </ProtectedRoute>
+                } />
 
-            <Route path="/clients" element={
-              <ProtectedRoute roles={['admin', 'staff', 'superadmin']}>
-                <Clients />
-              </ProtectedRoute>
-            } />
-            <Route path="/clients/:id/health" element={
-              <ProtectedRoute roles={['admin', 'staff']}>
-                <HealthProfile />
-              </ProtectedRoute>
-            } />
+                <Route path="/clients" element={
+                  <ProtectedRoute roles={['admin', 'staff', 'superadmin']}>
+                    <Clients />
+                  </ProtectedRoute>
+                } />
+                <Route path="/clients/:id/health" element={
+                  <ProtectedRoute roles={['admin', 'staff']}>
+                    <HealthProfile />
+                  </ProtectedRoute>
+                } />
 
-            <Route path="/facilities" element={
-              <ProtectedRoute roles={['superadmin']}>
-                <Facilities />
-              </ProtectedRoute>
-            } />
+                <Route path="/facilities" element={
+                  <ProtectedRoute roles={['superadmin']}>
+                    <Facilities />
+                  </ProtectedRoute>
+                } />
 
-            <Route path="/subscription-plans" element={
-              <ProtectedRoute roles={['superadmin']}>
-                <SubscriptionPlans />
-              </ProtectedRoute>
-            } />
+                <Route path="/subscription-plans" element={
+                  <ProtectedRoute roles={['superadmin']}>
+                    <SubscriptionPlans />
+                  </ProtectedRoute>
+                } />
 
-            <Route path="/facility-types" element={
-              <ProtectedRoute roles={['superadmin']}>
-                <FacilityTypes />
-              </ProtectedRoute>
-            } />
+                <Route path="/facility-types" element={
+                  <ProtectedRoute roles={['superadmin']}>
+                    <FacilityTypes />
+                  </ProtectedRoute>
+                } />
 
-            <Route path="/plans" element={
-              <ProtectedRoute roles={['admin']}>
-                <Plans />
-              </ProtectedRoute>
-            } />
+                <Route path="/plans" element={
+                  <ProtectedRoute roles={['admin']}>
+                    <Plans />
+                  </ProtectedRoute>
+                } />
 
-            <Route path="/staff" element={
-              <ProtectedRoute roles={['admin']}>
-                <Staff />
-              </ProtectedRoute>
-            } />
+                <Route path="/staff" element={
+                  <ProtectedRoute roles={['admin']}>
+                    <Staff />
+                  </ProtectedRoute>
+                } />
 
-            <Route path="/payments" element={
-              <ProtectedRoute roles={['admin', 'staff']}>
-                <Payments />
-              </ProtectedRoute>
-            } />
+                <Route path="/payments" element={
+                  <ProtectedRoute roles={['admin', 'staff']}>
+                    <Payments />
+                  </ProtectedRoute>
+                } />
 
-            <Route path="/reports" element={
-              <ProtectedRoute roles={['admin', 'superadmin']}>
-                <Reports />
-              </ProtectedRoute>
-            } />
+                <Route path="/reports" element={
+                  <ProtectedRoute roles={['admin', 'superadmin']}>
+                    <Reports />
+                  </ProtectedRoute>
+                } />
 
-          </Routes>
-        </Router>
-      </AuthProvider>
-    </ToastProvider>
+              </Routes>
+            </Suspense>
+          </Router>
+        </AuthProvider>
+      </ToastProvider>
+    </ThemeProvider>
   );
 };
 

@@ -158,55 +158,99 @@ const FacilityTypes = () => {
                     <div className="loader-icon"></div>
                 </div>
             ) : (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1.5rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1.25rem' }}>
                     {filteredTypes.map((type, index) => (
-                        <div key={type.id} className="card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.25rem', animationDelay: `${index * 0.05}s` }}>
+                        <div key={type.id} className="card" style={{
+                            padding: '1.25rem',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '1.25rem',
+                            animationDelay: `${index * 0.05}s`,
+                            borderRadius: '20px',
+                            border: '1px solid var(--border-color)',
+                            boxShadow: 'var(--shadow-md)'
+                        }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                                 <div style={{
-                                    width: '48px', height: '48px', borderRadius: '12px',
-                                    background: 'var(--primary-glow)', display: 'flex',
-                                    alignItems: 'center', justifyContent: 'center', color: 'var(--primary)'
+                                    width: '44px', height: '44px', borderRadius: '12px',
+                                    background: 'linear-gradient(135deg, var(--primary), var(--primary-light))',
+                                    display: 'flex',
+                                    alignItems: 'center', justifyContent: 'center',
+                                    color: 'white',
+                                    boxShadow: '0 4px 12px var(--primary-glow)'
                                 }}>
-                                    {icons.find(i => i.name === type.icon)?.icon || <Activity size={24} />}
+                                    {icons.find(i => i.name === type.icon)?.icon || <Activity size={22} />}
                                 </div>
-                                <div style={{ display: 'flex', gap: '0.25rem' }}>
-                                    <button className="icon-btn" onClick={() => handleEdit(type)} style={{ color: 'var(--primary)' }}>
-                                        <Edit2 size={16} />
+                                <div style={{ display: 'flex', gap: '0.4rem' }}>
+                                    <button className="icon-btn" onClick={() => handleEdit(type)} style={{ color: 'var(--primary)', background: 'var(--primary-glow)', width: '32px', height: '32px' }}>
+                                        <Edit2 size={14} />
                                     </button>
-                                    <button className="icon-btn" onClick={() => handleDelete(type.id)} style={{ color: 'var(--danger)' }}>
-                                        <Trash2 size={16} />
+                                    <button className="icon-btn" onClick={() => handleDelete(type.id)} style={{ color: 'var(--danger)', background: 'rgba(239, 68, 68, 0.1)', width: '32px', height: '32px' }}>
+                                        <Trash2 size={14} />
                                     </button>
                                 </div>
                             </div>
 
                             <div>
-                                <h3 style={{ fontSize: '1.25rem', fontWeight: '600', color: 'var(--text-highlight)' }}>{type.name}</h3>
-                                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-                                    {type.memberFormConfig?.length || 0} Custom Fields Defined
+                                <h3 style={{ fontSize: '1.1rem', fontWeight: '800', color: 'var(--text-highlight)', letterSpacing: '-0.01em' }}>{type.name}</h3>
+                                <div style={{
+                                    fontSize: '0.7rem',
+                                    fontWeight: '700',
+                                    color: 'var(--text-secondary)',
+                                    marginTop: '2px',
+                                    textTransform: 'uppercase',
+                                    letterSpacing: '0.05em'
+                                }}>
+                                    {type.memberFormConfig?.length || 0} Extra Fields
                                 </div>
                             </div>
 
-                            <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: '12px', padding: '1rem', border: '1px solid var(--border-color)' }}>
-                                <div style={{ fontSize: '0.75rem', fontWeight: '700', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '0.75rem', letterSpacing: '0.05em' }}>Form Fields</div>
-                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
-                                    <span className="badge-pill">Name</span>
-                                    <span className="badge-pill">Phone</span>
-                                    <span className="badge-pill">Email</span>
-                                    {type.memberFormConfig?.map((field, idx) => (
-                                        <span key={idx} className="badge-pill active">{field.label}</span>
+                            <div style={{
+                                background: 'var(--bg-body)',
+                                borderRadius: '14px',
+                                padding: '1rem',
+                                border: '1px solid var(--border-color)',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '0.75rem'
+                            }}>
+                                <div style={{
+                                    fontSize: '0.65rem',
+                                    fontWeight: '800',
+                                    textTransform: 'uppercase',
+                                    color: 'var(--text-muted)',
+                                    letterSpacing: '0.1em'
+                                }}>Fields</div>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                                    <span className="badge-pill" style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem' }}>Name</span>
+                                    <span className="badge-pill" style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem' }}>Phone</span>
+                                    <span className="badge-pill" style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem' }}>Email</span>
+                                    {type.memberFormConfig?.slice(0, 3).map((field, idx) => (
+                                        <span key={idx} className="badge-pill active" style={{
+                                            padding: '0.2rem 0.5rem', fontSize: '0.7rem',
+                                            background: 'var(--primary)',
+                                            color: 'white',
+                                            border: 'none',
+                                            fontWeight: '700'
+                                        }}>
+                                            {field.label}
+                                        </span>
                                     ))}
+                                    {type.memberFormConfig?.length > 3 && (
+                                        <span className="badge-pill" style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem' }}>+{type.memberFormConfig.length - 3} more</span>
+                                    )}
                                 </div>
                             </div>
                         </div>
                     ))}
 
                     {filteredTypes.length === 0 && (
-                        <div style={{ gridColumn: '1/-1', textAlign: 'center', padding: '4rem', color: 'var(--text-muted)' }}>
-                            <Layers size={48} style={{ marginBottom: '1rem', opacity: 0.2 }} />
-                            <p>
+                        <div style={{ gridColumn: '1/-1', textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>
+                            <Layers size={48} style={{ marginBottom: '1rem', opacity: 0.1 }} />
+                            <p style={{ fontSize: '0.9rem' }}>
                                 {searchText
-                                    ? 'No facility types match your search.'
-                                    : 'No facility types defined yet. Create one to get started.'}
+                                    ? 'No matches found.'
+                                    : 'No facility types defined.'}
                             </p>
                         </div>
                     )}
@@ -344,7 +388,7 @@ const FacilityTypes = () => {
                     border-color: rgba(34, 197, 94, 0.2);
                 }
             `}</style>
-        </div>
+        </div >
     );
 };
 

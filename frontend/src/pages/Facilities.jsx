@@ -297,113 +297,168 @@ const Facilities = () => {
                     const details = getFacilityUserDetails(facility);
                     const adminEmail = getFacilityAdminEmail(facility);
                     return (
-                    <div className="card" key={facility.id} style={{
-                        animationDelay: `${index * 0.1}s`,
-                        padding: '0',
-                        overflow: 'visible',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        borderRadius: '16px',
-                        boxShadow: '0 10px 30px rgba(0, 0, 0, 0.28)'
-                    }}>
-                        <div style={{
-                            padding: '1.25rem 1.25rem 1rem 1.25rem',
-                            background: 'linear-gradient(135deg, rgba(255,255,255,0.05), transparent)',
-                            borderBottom: '1px solid var(--border-color)',
+                        <div className="card stat-card" key={facility.id} style={{
+                            animationDelay: `${index * 0.1}s`,
+                            padding: '0',
+                            overflow: 'hidden',
                             display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'start',
-                            borderTopLeftRadius: 'var(--radius-md)',
-                            borderTopRightRadius: 'var(--radius-md)'
+                            flexDirection: 'column',
+                            borderRadius: '24px',
+                            minHeight: '480px'
                         }}>
-                            <div style={{ padding: '12px', background: 'rgba(34, 197, 94, 0.1)', borderRadius: '12px', color: 'var(--primary)' }}>
-                                {getTypeIcon(facility)}
+                            <div style={{
+                                padding: '1.5rem',
+                                background: 'linear-gradient(135deg, var(--primary), var(--primary-light))',
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                position: 'relative'
+                            }}>
+                                <div style={{
+                                    padding: '12px',
+                                    background: 'rgba(255, 255, 255, 0.2)',
+                                    borderRadius: '16px',
+                                    color: 'white',
+                                    backdropFilter: 'blur(10px)',
+                                    boxShadow: '0 8px 16px rgba(0,0,0,0.1)'
+                                }}>
+                                    {getTypeIcon(facility)}
+                                </div>
+                                <div style={{ position: 'relative', zIndex: 10 }}>
+                                    <ActionMenu
+                                        onEdit={() => handleEditClick(facility)}
+                                        onDelete={() => handleDeleteClick(facility.id)}
+                                        onPasswordReset={() => setPasswordModal({ isOpen: true, facilityId: facility.id, newPassword: '' })}
+                                    />
+                                </div>
                             </div>
-                            <ActionMenu
-                                onEdit={() => handleEditClick(facility)}
-                                onDelete={() => handleDeleteClick(facility.id)}
-                                onPasswordReset={() => setPasswordModal({ isOpen: true, facilityId: facility.id, newPassword: '' })}
-                            />
-                        </div>
 
-                        <div style={{ padding: '1.25rem', flex: 1 }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.85rem' }}>
-                                <h3 style={{ fontSize: '1.45rem', color: 'var(--text-highlight)', lineHeight: '1.2', margin: 0 }}>{facility.name}</h3>
-                                <span style={{ fontSize: '0.75rem', padding: '2px 8px', borderRadius: '12px', background: 'var(--bg-card)', border: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}>
-                                    {getTypeLabel(facility)}
-                                </span>
-                            </div>
+                            <div style={{ padding: '1.75rem', flex: 1, display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                    <div style={{ flex: 1 }}>
+                                        <h3 style={{ fontSize: '1.5rem', fontWeight: '800', color: 'var(--text-highlight)', letterSpacing: '-0.02em', marginBottom: '4px' }}>{facility.name}</h3>
+                                        <span style={{
+                                            fontSize: '0.75rem',
+                                            fontWeight: '700',
+                                            padding: '4px 10px',
+                                            borderRadius: '8px',
+                                            background: 'var(--primary-glow)',
+                                            color: 'var(--primary)',
+                                            textTransform: 'uppercase',
+                                            letterSpacing: '0.02em'
+                                        }}>
+                                            {getTypeLabel(facility)}
+                                        </span>
+                                    </div>
+                                </div>
 
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', marginBottom: '0.9rem' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', color: 'var(--text-secondary)', fontSize: '0.88rem', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '0.5rem 0.65rem' }}>
-                                    <MapPin size={15} color="var(--accent-orange)" />
-                                    <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                        {facility.address || 'No address provided'}
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                                    <div style={{
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '0.75rem',
+                                        color: 'var(--text-secondary)',
+                                        fontSize: '0.9rem',
+                                        background: 'var(--bg-body)',
+                                        borderRadius: '14px',
+                                        padding: '0.75rem 1rem',
+                                        border: '1px solid var(--border-color)'
+                                    }}>
+                                        <MapPin size={16} color="var(--primary)" />
+                                        <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: '500' }}>
+                                            {facility.address || 'No address provided'}
+                                        </span>
+                                    </div>
+                                    <div style={{
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '0.75rem',
+                                        color: 'var(--text-secondary)',
+                                        fontSize: '0.9rem',
+                                        background: 'var(--bg-body)',
+                                        borderRadius: '14px',
+                                        padding: '0.75rem 1rem',
+                                        border: '1px solid var(--border-color)'
+                                    }}>
+                                        <Mail size={16} color="var(--primary)" />
+                                        <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: '500' }}>{adminEmail}</span>
+                                    </div>
+                                </div>
+
+                                <div style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.75rem',
+                                    padding: '1rem',
+                                    background: 'var(--primary-glow)',
+                                    borderRadius: '16px',
+                                    border: '1px solid var(--primary-light)',
+                                    opacity: 0.9
+                                }}>
+                                    <Users size={18} color="var(--primary)" />
+                                    <span style={{ fontSize: '1rem', color: 'var(--primary)', fontWeight: '700' }}>
+                                        {details.totalUsers} Ecosystem Users
                                     </span>
                                 </div>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', color: 'var(--text-secondary)', fontSize: '0.86rem', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '0.5rem 0.65rem' }}>
-                                    <Mail size={15} color="var(--accent-blue)" />
-                                    <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{adminEmail}</span>
-                                </div>
-                            </div>
 
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.85rem', background: 'var(--bg-body)', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
-                                <Users size={16} color="var(--accent-blue)" />
-                                <span style={{ fontSize: '0.95rem', color: 'var(--text-main)', fontWeight: '600' }}>
-                                    {details.totalUsers} Users (Admins + Staff)
-                                </span>
-                            </div>
-                            <div style={{ marginTop: '0.8rem', display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '0.5rem' }}>
-                                <div style={{ padding: '0.6rem 0.45rem', border: '1px solid var(--border-color)', borderRadius: '10px', textAlign: 'center', background: 'rgba(255,255,255,0.02)' }}>
-                                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Admins</div>
-                                    <div style={{ fontSize: '1.1rem', fontWeight: '700' }}>{details.adminCount}</div>
-                                </div>
-                                <div style={{ padding: '0.6rem 0.45rem', border: '1px solid var(--border-color)', borderRadius: '10px', textAlign: 'center', background: 'rgba(255,255,255,0.02)' }}>
-                                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Staff</div>
-                                    <div style={{ fontSize: '1.1rem', fontWeight: '700' }}>{details.staffCount}</div>
-                                </div>
-                                <div style={{ padding: '0.6rem 0.45rem', border: '1px solid var(--border-color)', borderRadius: '10px', textAlign: 'center', background: 'rgba(255,255,255,0.02)' }}>
-                                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Members</div>
-                                    <div style={{ fontSize: '1.1rem', fontWeight: '700' }}>{details.memberCount}</div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div style={{
-                            padding: '1rem 1.25rem',
-                            borderTop: '1px solid var(--border-color)',
-                            background: 'rgba(0,0,0,0.2)',
-                        }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                                <ShieldCheck size={14} />
-                                <span>ID: #{facility.id} • Created: {formatDate(facility.createdAt)}</span>
-                            </div>
-                            <div style={{ marginTop: '0.85rem', paddingTop: '0.85rem', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.85rem' }}>
-                                <div style={{ fontSize: '0.8rem' }}>
-                                    <div style={{ color: 'var(--text-secondary)', marginBottom: '0.15rem' }}>Status</div>
-                                    <div style={{
-                                        color:
-                                            facility.subscriptionStatus === 'active'
-                                                ? 'var(--success)'
-                                                : facility.subscriptionStatus === 'pending'
-                                                    ? 'var(--accent-orange)'
-                                                    : 'var(--danger)',
-                                        fontWeight: '600', textTransform: 'uppercase', fontSize: '0.75rem'
-                                    }}>
-                                        {facility.subscriptionStatus}
-                                    </div>
-                                    {facility.subscriptionExpiresAt && (
-                                        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                                            Exp: {formatDate(facility.subscriptionExpiresAt)}
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem' }}>
+                                    {[
+                                        { label: 'Admins', value: details.adminCount },
+                                        { label: 'Staff', value: details.staffCount },
+                                        { label: 'Members', value: details.memberCount }
+                                    ].map((stat) => (
+                                        <div key={stat.label} style={{
+                                            padding: '0.75rem 0.5rem',
+                                            border: '1px solid var(--border-color)',
+                                            borderRadius: '16px',
+                                            textAlign: 'center',
+                                            background: 'var(--bg-card)',
+                                            boxShadow: 'var(--shadow-sm)'
+                                        }}>
+                                            <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: '700', letterSpacing: '0.05em', marginBottom: '4px' }}>{stat.label}</div>
+                                            <div style={{ fontSize: '1.25rem', fontWeight: '800', color: 'var(--text-highlight)' }}>{stat.value}</div>
                                         </div>
-                                    )}
+                                    ))}
                                 </div>
-                                <button className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '0.4rem 0.8rem', borderRadius: '999px', fontWeight: '600', whiteSpace: 'nowrap' }} onClick={() => openSubscriptionModal(facility)}>
-                                    Manage Subscription
-                                </button>
+                            </div>
+
+                            <div style={{
+                                padding: '1.5rem',
+                                borderTop: '1px solid var(--border-color)',
+                                background: 'var(--bg-body)',
+                                marginTop: 'auto'
+                            }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '1.25rem', fontWeight: '600' }}>
+                                    <ShieldCheck size={14} color="var(--primary)" />
+                                    <span>FID: {facility.id} • Registered {formatDate(facility.createdAt)}</span>
+                                </div>
+
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <div>
+                                        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: '700', marginBottom: '4px', letterSpacing: '0.05em' }}>Subscription</div>
+                                        <span className={`status-badge ${facility.subscriptionStatus === 'active' ? 'status-active' :
+                                            facility.subscriptionStatus === 'pending' ? 'status-payment-due' : 'status-inactive'
+                                            }`} style={{ fontSize: '0.75rem', padding: '4px 12px', borderRadius: '8px' }}>
+                                            {facility.subscriptionStatus}
+                                        </span>
+                                    </div>
+                                    <button
+                                        className="btn btn-secondary"
+                                        style={{
+                                            fontSize: '0.8rem',
+                                            padding: '0.5rem 1rem',
+                                            borderRadius: '12px',
+                                            fontWeight: '700',
+                                            border: '1px solid var(--border-color)',
+                                            background: 'var(--bg-card)'
+                                        }}
+                                        onClick={() => openSubscriptionModal(facility)}
+                                    >
+                                        Settings
+                                    </button>
+                                </div>
                             </div>
                         </div>
-                    </div>
                     );
                 })}
             </div>

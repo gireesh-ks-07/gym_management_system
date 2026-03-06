@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useCallback } from 'react';
 import { CheckCircle, XCircle, Info, X } from 'lucide-react';
+import ConfirmationModal from '../components/ConfirmationModal';
 
 const ToastContext = createContext();
 
@@ -19,8 +20,8 @@ export const ToastProvider = ({ children }) => {
         setToasts(prev => prev.filter(t => t.id !== id));
     }, []);
 
-    const showConfirm = useCallback((message, onConfirm, title = 'Are you sure?') => {
-        setConfirm({ message, onConfirm, title });
+    const showConfirm = useCallback((message, onConfirm, title = 'Are you sure?', isDangerous = true) => {
+        setConfirm({ message, onConfirm, title, isDangerous });
     }, []);
 
     const handleConfirm = () => {
@@ -37,21 +38,14 @@ export const ToastProvider = ({ children }) => {
             {children}
 
             {/* Confirm Dialog */}
-            {confirm && (
-                <div className="modal-overlay" style={{ zIndex: 9999 }}>
-                    <div className="modal-content" style={{ maxWidth: '400px', textAlign: 'center', padding: '2rem' }}>
-                        <div style={{ marginBottom: '1.5rem', color: 'var(--danger)', display: 'flex', justifyContent: 'center' }}>
-                            <XCircle size={48} />
-                        </div>
-                        <h2 style={{ marginBottom: '0.5rem' }}>{confirm.title}</h2>
-                        <p style={{ color: 'var(--text-muted)', marginBottom: '2rem' }}>{confirm.message}</p>
-                        <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
-                            <button className="btn btn-secondary" onClick={handleCancel} style={{ flex: 1 }}>Cancel</button>
-                            <button className="btn btn-danger" onClick={handleConfirm} style={{ flex: 1 }}>Confirm</button>
-                        </div>
-                    </div>
-                </div>
-            )}
+            <ConfirmationModal
+                isOpen={!!confirm}
+                onClose={handleCancel}
+                onConfirm={handleConfirm}
+                title={confirm?.title || 'Are you sure?'}
+                message={confirm?.message || ''}
+                isDangerous={confirm?.isDangerous !== false}
+            />
 
             <div className="toast-container">
                 {toasts.map(toast => (

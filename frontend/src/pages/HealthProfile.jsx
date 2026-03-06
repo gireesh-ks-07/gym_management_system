@@ -67,6 +67,7 @@ const HealthProfile = () => {
   const [showProfileEditor, setShowProfileEditor] = useState(false);
   const [showQuickLog, setShowQuickLog] = useState(false);
   const [showWeightModal, setShowWeightModal] = useState(false);
+  const [shiftConfirm, setShiftConfirm] = useState({ isOpen: false, dayNumber: null, note: '', cardioMinutes: '' });
   const [expandedDay, setExpandedDay] = useState(null);
   const [expandedHistory, setExpandedHistory] = useState(null);
   const [calendarMonth, setCalendarMonth] = useState(() => {
@@ -115,6 +116,7 @@ const HealthProfile = () => {
     date: new Date().toISOString().split('T')[0],
     weight: ''
   });
+  const [creationExpandedDayIdx, setCreationExpandedDayIdx] = useState(0);
 
   const fetchData = async () => {
     setLoading(true);
@@ -335,9 +337,13 @@ const HealthProfile = () => {
     const scheduleId = profile.currentSchedule?.id;
     if (!scheduleId) return addToast('No active schedule found', 'error');
     if (status === 'missed') {
-      const shouldShift = window.confirm('Shift program forward for missed workout?');
-      note = shouldShift ? `${note} | Shift requested` : note;
+      setShiftConfirm({ isOpen: true, dayNumber, note, cardioMinutes });
+      return;
     }
+    await executeMarkWorkout({ status, dayNumber, note, cardioMinutes, scheduleId });
+  };
+
+  const executeMarkWorkout = async ({ status, dayNumber, note, cardioMinutes, scheduleId }) => {
     try {
       await api.post(`/clients/${id}/workout-schedules/${scheduleId}/day-log`, {
         dayNumber,
@@ -391,7 +397,6 @@ const HealthProfile = () => {
 
   return (
     <div className="animate-fade-in" style={{ paddingBottom: '3rem' }}>
-
       {/* Header Profile Section */}
       <div className="glass-panel" style={{ marginBottom: '2rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '1.5rem 2rem' }}>
         <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'center' }}>
@@ -399,7 +404,7 @@ const HealthProfile = () => {
             {initials(member?.name)}
           </div>
           <div>
-            <h1 style={{ fontSize: '1.8rem', fontWeight: 800, marginBottom: '0.2rem', background: 'linear-gradient(to right, #fff, #94a3b8)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+            <h1 style={{ fontSize: '1.8rem', fontWeight: 800, marginBottom: '0.2rem', background: 'linear-gradient(135deg, var(--text-highlight), var(--text-muted))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
               {member?.name}
             </h1>
             <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
@@ -409,7 +414,6 @@ const HealthProfile = () => {
             </div>
           </div>
         </div>
-
         <div style={{ display: 'flex', gap: '2rem', textAlign: 'right' }}>
           <div>
             <div className="stat-label">Current Streak</div>
@@ -419,9 +423,7 @@ const HealthProfile = () => {
           </div>
           <div>
             <div className="stat-label">Progress</div>
-            <div className="stat-value-lg">
-              {metrics.progressPct}%
-            </div>
+            <div className="stat-value-lg">{metrics.progressPct}%</div>
           </div>
         </div>
       </div>
@@ -462,12 +464,12 @@ const HealthProfile = () => {
                 </div>
               </div>
 
-              <div className="metric-card" style={{ background: 'linear-gradient(135deg, rgba(88, 28, 135, 0.2), rgba(15, 23, 42, 0))', border: '1px solid rgba(167, 139, 250, 0.2)' }}>
+              <div className="insight-card">
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-                  <Sparkles size={16} color="#a78bfa" />
-                  <span style={{ color: '#ddd6fe', fontWeight: 600, fontSize: '0.9rem' }}>Insight</span>
+                  <Sparkles size={16} color="var(--primary)" />
+                  <span style={{ color: 'var(--text-highlight)', fontWeight: 600, fontSize: '0.9rem' }}>Smart Insight</span>
                 </div>
-                <p style={{ fontSize: '0.85rem', color: '#ddd6fe', lineHeight: 1.5 }}>
+                <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
                   {smartInsight}
                 </p>
               </div>
@@ -478,13 +480,13 @@ const HealthProfile = () => {
           <div className="glass-panel">
             <div className="section-title" style={{ marginBottom: '1rem' }}><Zap size={18} /> Quick Actions</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
-              <button className="btn btn-primary" style={{ justifyContent: 'flex-start' }} onClick={() => setShowWeightModal(true)}>
+              <button className="btn btn-primary" style={{ justifyContent: 'flex-start', borderRadius: '12px', boxShadow: '0 4px 12px var(--primary-glow)' }} onClick={() => setShowWeightModal(true)}>
                 <Scale size={16} /> Log Weight
               </button>
-              <button className="btn btn-secondary" style={{ justifyContent: 'flex-start' }} onClick={() => setShowPlanEditor(true)}>
+              <button className="btn btn-ghost" style={{ justifyContent: 'flex-start', border: '1px solid var(--border-color)', borderRadius: '12px' }} onClick={() => setShowPlanEditor(true)}>
                 <Dumbbell size={16} /> Update Plan
               </button>
-              <button className="btn btn-secondary" style={{ justifyContent: 'flex-start' }} onClick={() => setShowQuickLog(!showQuickLog)}>
+              <button className="btn btn-ghost" style={{ justifyContent: 'flex-start', border: '1px solid var(--border-color)', borderRadius: '12px' }} onClick={() => setShowQuickLog(!showQuickLog)}>
                 <Footprints size={16} /> Log Cardio
               </button>
             </div>
@@ -500,46 +502,53 @@ const HealthProfile = () => {
               <div className="section-title"><TrendingUp size={18} /> Weight History</div>
               <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Last 3 Months</div>
             </div>
-            <div style={{ height: '300px', width: '100%', marginTop: '1rem' }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={sortedWeights}>
-                  <defs>
-                    <linearGradient id="colorWeight" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor={trendTone} stopOpacity={0.3} />
-                      <stop offset="95%" stopColor={trendTone} stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
-                  <XAxis
-                    dataKey="date"
-                    stroke="var(--text-muted)"
-                    tick={{ fontSize: 11 }}
-                    tickLine={false}
-                    axisLine={false}
-                    tickFormatter={(val) => {
-                      const d = new Date(val);
-                      return `${d.toLocaleString('default', { month: 'short' })} ${d.getDate()}`;
+            <div style={{ height: '300px', width: '100%', marginTop: '1rem', position: 'relative' }}>
+              {sortedWeights.length === 0 ? (
+                <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', gap: '1rem' }}>
+                  <TrendingUp size={48} strokeWidth={1} style={{ opacity: 0.3 }} />
+                  <p style={{ fontSize: '0.9rem' }}>No weight data yet. Start logging to see trends.</p>
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={sortedWeights}>
+                    <defs>
+                      <linearGradient id="colorWeight" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor={trendTone} stopOpacity={0.3} />
+                        <stop offset="95%" stopColor={trendTone} stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                    <XAxis
+                      dataKey="date"
+                      stroke="var(--text-muted)"
+                      tick={{ fontSize: 11 }}
+                      tickLine={false}
+                      axisLine={false}
+                      tickFormatter={(val) => {
+                        const d = new Date(val);
+                        return `${d.toLocaleString('default', { month: 'short' })} ${d.getDate()}`;
                       }}
                     />
-                  <YAxis
-                    domain={['auto', 'auto']}
-                    stroke="var(--text-muted)"
-                    tick={{ fontSize: 11 }}
-                    tickLine={false}
-                    axisLine={false}
-                    width={30}
-                  />
-                  <Tooltip
-                    contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: '8px' }}
-                    itemStyle={{ color: '#fff' }}
-                    labelStyle={{ color: '#94a3b8' }}
-                  />
-                  <Area type="monotone" dataKey="weight" stroke={trendTone} strokeWidth={3} fillOpacity={1} fill="url(#colorWeight)" />
-                  {profile.targetWeight && (
-                    <Line type="monotone" dataKey={() => Number(profile.targetWeight)} stroke="#fbbf24" strokeDasharray="5 5" strokeWidth={2} dot={false} activeDot={false} />
-                  )}
-                </AreaChart>
-              </ResponsiveContainer>
+                    <YAxis
+                      domain={['auto', 'auto']}
+                      stroke="var(--text-muted)"
+                      tick={{ fontSize: 11 }}
+                      tickLine={false}
+                      axisLine={false}
+                      width={30}
+                    />
+                    <Tooltip
+                      contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: '8px' }}
+                      itemStyle={{ color: '#fff' }}
+                      labelStyle={{ color: '#94a3b8' }}
+                    />
+                    <Area type="monotone" dataKey="weight" stroke={trendTone} strokeWidth={3} fillOpacity={1} fill="url(#colorWeight)" />
+                    {profile.targetWeight && (
+                      <Line type="monotone" dataKey={() => Number(profile.targetWeight)} stroke="#fbbf24" strokeDasharray="5 5" strokeWidth={2} dot={false} activeDot={false} />
+                    )}
+                  </AreaChart>
+                </ResponsiveContainer>
+              )}
             </div>
           </div>
 
@@ -620,8 +629,8 @@ const HealthProfile = () => {
                   return (
                     <div key={day.dayNumber}
                       style={{
-                        background: isNext ? 'rgba(16, 185, 129, 0.1)' : 'rgba(255,255,255,0.02)',
-                        border: `1px solid \${isNext ? 'rgba(16,185,129,0.3)' : 'rgba(255,255,255,0.05)'}`,
+                        background: isNext ? 'rgba(16, 185, 129, 0.1)' : 'var(--bg-body)',
+                        border: `1px solid ${isNext ? 'var(--primary)' : 'var(--border-color)'}`,
                         borderRadius: '12px',
                         overflow: 'hidden',
                         transition: 'all 0.3s'
@@ -673,20 +682,17 @@ const HealthProfile = () => {
                 <div style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>No past schedules.</div>
               ) : (
                 profile.pastSchedules.slice(0, 5).map(s => (
-                  <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px' }}>
+                  <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px', background: 'var(--bg-body)', border: '1px solid var(--border-color)', borderRadius: '8px' }}>
                     <div>
                       <div style={{ fontSize: '0.9rem', fontWeight: 600 }}>{s.name}</div>
                       <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{toInputDate(s.startedAt)} - {toInputDate(s.endedAt)}</div>
                     </div>
-                    <CheckCircle2 size={16} color="var(--text-muted)" />
                   </div>
                 ))
               )}
             </div>
           </div>
-
         </div>
-
       </div>
 
       {/* Editor Modal */}
@@ -704,6 +710,40 @@ const HealthProfile = () => {
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 12 }}>
           <button className="btn btn-secondary" onClick={() => setShowProfileEditor(false)}>Cancel</button>
           <button className="btn btn-primary" onClick={() => saveProfile(profileDraft)}>Save Changes</button>
+        </div>
+      </Modal>
+
+      {/* Shift Program Modal */}
+      <Modal isOpen={shiftConfirm.isOpen} onClose={() => setShiftConfirm({ ...shiftConfirm, isOpen: false })} title="Missed Workout">
+        <div style={{ padding: '1rem', textAlign: 'center' }}>
+          <div style={{
+            width: '64px', height: '64px', borderRadius: '50%',
+            background: 'rgba(59, 130, 246, 0.1)',
+            color: 'var(--accent-blue)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            margin: '0 auto 1.5rem',
+            boxShadow: '0 0 20px rgba(59, 130, 246, 0.2)'
+          }}>
+            <AlertCircle size={32} />
+          </div>
+          <h3 style={{ fontSize: '1.25rem', marginBottom: '0.75rem', color: 'var(--text-highlight)' }}>Shift Program Forward?</h3>
+          <p style={{ color: 'var(--text-secondary)', marginBottom: '2rem', lineHeight: '1.6' }}>
+            Do you want to shift the workout program forward to make up for this missed session?
+          </p>
+          <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
+            <button className="btn btn-secondary" onClick={() => {
+              executeMarkWorkout({ status: 'missed', ...shiftConfirm, note: shiftConfirm.note, scheduleId: profile.currentSchedule?.id });
+              setShiftConfirm({ isOpen: false, dayNumber: null, note: '', cardioMinutes: '' });
+            }}>
+              No, Keep Schedule
+            </button>
+            <button className="btn btn-primary" onClick={() => {
+              executeMarkWorkout({ status: 'missed', ...shiftConfirm, note: `${shiftConfirm.note ? shiftConfirm.note + ' | ' : ''}Shift requested`, scheduleId: profile.currentSchedule?.id });
+              setShiftConfirm({ isOpen: false, dayNumber: null, note: '', cardioMinutes: '' });
+            }}>
+              Yes, Shift Forward
+            </button>
+          </div>
         </div>
       </Modal>
 
@@ -755,103 +795,152 @@ const HealthProfile = () => {
         </div>
 
         <div style={{ maxHeight: '400px', overflowY: 'auto', paddingRight: '10px', margin: '1rem 0' }}>
-          {scheduleForm.days.map((day, dayIdx) => (
-            <div key={`day-${dayIdx}`} style={{ border: '1px solid var(--border-color)', borderRadius: '12px', padding: '16px', marginBottom: '16px', background: 'rgba(0,0,0,0.2)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem' }}>
-                <h4 style={{ fontSize: '1rem', color: 'var(--text-main)' }}>Day {day.dayNumber} Definition</h4>
-                {scheduleForm.days.length > 1 && <button className="btn btn-ghost" style={{ padding: '4px', color: '#ef4444' }} onClick={() => {
-                  const next = scheduleForm.days.filter((_, i) => i !== dayIdx);
-                  setScheduleForm({ ...scheduleForm, days: next });
-                }}><X size={16} /></button>}
-              </div>
-
-              <div className="form-grid">
-                <div className="input-group">
-                  <label className="input-label">Focus Area</label>
-                  <input className="input-field" placeholder="e.g. Chest & Triceps" value={day.focus} onChange={(e) => {
-                    const next = [...scheduleForm.days];
-                    next[dayIdx] = { ...next[dayIdx], focus: e.target.value };
-                    setScheduleForm({ ...scheduleForm, days: next });
-                  }} />
-                </div>
-                <div className="input-group">
-                  <label className="input-label">Day Number (in sequence)</label>
-                  <input className="input-field" type="number" value={day.dayNumber} onChange={(e) => {
-                    const next = [...scheduleForm.days];
-                    next[dayIdx] = { ...next[dayIdx], dayNumber: Number(e.target.value || 1) };
-                    setScheduleForm({ ...scheduleForm, days: next });
-                  }} />
-                </div>
-              </div>
-
-              <div style={{ display: 'grid', gap: '8px' }}>
-                <label className="input-label">Exercises</label>
-                {day.exercises.map((ex, exIdx) => (
-                  <div key={exIdx} style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr 1fr 1fr 30px', gap: '8px', alignItems: 'center' }}>
-                    <input className="input-field" placeholder="Exercise Name" value={ex.name} onChange={(e) => {
-                      const next = [...scheduleForm.days];
-                      next[dayIdx].exercises[exIdx].name = e.target.value;
-                      setScheduleForm({ ...scheduleForm, days: next });
-                    }} />
-                    <input className="input-field" placeholder="Sets" value={ex.sets} onChange={(e) => {
-                      const next = [...scheduleForm.days];
-                      next[dayIdx].exercises[exIdx].sets = e.target.value;
-                      setScheduleForm({ ...scheduleForm, days: next });
-                    }} />
-                    <input className="input-field" placeholder="Reps" value={ex.reps} onChange={(e) => {
-                      const next = [...scheduleForm.days];
-                      next[dayIdx].exercises[exIdx].reps = e.target.value;
-                      setScheduleForm({ ...scheduleForm, days: next });
-                    }} />
-                    <input className="input-field" placeholder="Weight" value={ex.weight} onChange={(e) => {
-                      const next = [...scheduleForm.days];
-                      next[dayIdx].exercises[exIdx].weight = e.target.value;
-                      setScheduleForm({ ...scheduleForm, days: next });
-                    }} />
-                    <button style={{ color: '#ef4444', background: 'transparent', border: 0, cursor: 'pointer' }} onClick={() => {
-                      const next = [...scheduleForm.days];
-                      next[dayIdx].exercises = next[dayIdx].exercises.filter((_, i) => i !== exIdx);
-                      setScheduleForm({ ...scheduleForm, days: next });
-                    }}><X size={16} /></button>
+          {scheduleForm.days.map((day, dayIdx) => {
+            const isCreationExpanded = creationExpandedDayIdx === dayIdx;
+            return (
+              <div key={`day-${dayIdx}`} style={{
+                border: '1px solid var(--border-color)',
+                borderRadius: '16px',
+                padding: '1.25rem',
+                marginBottom: '1rem',
+                background: isCreationExpanded ? 'rgba(16, 185, 129, 0.03)' : 'rgba(0,0,0,0.1)',
+                transition: 'all 0.3s'
+              }}>
+                <div
+                  onClick={() => setCreationExpandedDayIdx(isCreationExpanded ? null : dayIdx)}
+                  style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                    <div style={{
+                      width: '32px', height: '32px', borderRadius: '10px',
+                      background: isCreationExpanded ? 'var(--primary)' : 'var(--bg-body)',
+                      color: isCreationExpanded ? 'white' : 'var(--text-secondary)',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: '0.85rem', fontWeight: 'bold', border: '1px solid var(--border-color)'
+                    }}>
+                      {day.dayNumber}
+                    </div>
+                    <h4 style={{ fontSize: '1rem', color: isCreationExpanded ? 'var(--text-highlight)' : 'var(--text-main)', fontWeight: '700' }}>
+                      {day.focus || `Day ${day.dayNumber} Definition`}
+                    </h4>
                   </div>
-                ))}
-                <button className="btn btn-secondary" style={{ marginTop: '0.5rem' }} onClick={() => {
-                  const next = [...scheduleForm.days];
-                  next[dayIdx].exercises.push({ name: '', sets: '', reps: '', weight: '' });
-                  setScheduleForm({ ...scheduleForm, days: next });
-                }}>+ Add Exercise</button>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    {scheduleForm.days.length > 1 && (
+                      <button className="btn btn-ghost" style={{ padding: '6px', color: 'var(--danger)', background: 'rgba(239, 68, 68, 0.05)' }} onClick={(e) => {
+                        e.stopPropagation();
+                        const next = scheduleForm.days.filter((_, i) => i !== dayIdx);
+                        setScheduleForm({ ...scheduleForm, days: next });
+                        if (creationExpandedDayIdx >= next.length) setCreationExpandedDayIdx(Math.max(0, next.length - 1));
+                      }}>
+                        <X size={16} />
+                      </button>
+                    )}
+                    <ChevronDown size={20} style={{
+                      transform: isCreationExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                      transition: 'transform 0.3s',
+                      color: 'var(--text-muted)'
+                    }} />
+                  </div>
+                </div>
+
+                {isCreationExpanded && (
+                  <div style={{ marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid var(--border-color)' }} onClick={(e) => e.stopPropagation()}>
+                    <div className="form-grid">
+                      <div className="input-group">
+                        <label className="input-label">Focus Area</label>
+                        <input className="input-field" placeholder="e.g. Chest & Triceps" value={day.focus} onChange={(e) => {
+                          const next = [...scheduleForm.days];
+                          next[dayIdx] = { ...next[dayIdx], focus: e.target.value };
+                          setScheduleForm({ ...scheduleForm, days: next });
+                        }} />
+                      </div>
+                      <div className="input-group">
+                        <label className="input-label">Day Number</label>
+                        <input className="input-field" type="number" value={day.dayNumber} onChange={(e) => {
+                          const next = [...scheduleForm.days];
+                          next[dayIdx] = { ...next[dayIdx], dayNumber: Number(e.target.value || 1) };
+                          setScheduleForm({ ...scheduleForm, days: next });
+                        }} />
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'grid', gap: '10px' }}>
+                      <div style={{ fontSize: '0.8rem', fontWeight: '700', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>Exercises</div>
+                      {day.exercises.map((ex, exIdx) => (
+                        <div key={exIdx} style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr 1fr 1fr 30px', gap: '8px', alignItems: 'center' }}>
+                          <input className="input-field" placeholder="Exercise" value={ex.name} onChange={(e) => {
+                            const next = [...scheduleForm.days];
+                            next[dayIdx].exercises[exIdx].name = e.target.value;
+                            setScheduleForm({ ...scheduleForm, days: next });
+                          }} />
+                          <input className="input-field" placeholder="Sets" value={ex.sets} onChange={(e) => {
+                            const next = [...scheduleForm.days];
+                            next[dayIdx].exercises[exIdx].sets = e.target.value;
+                            setScheduleForm({ ...scheduleForm, days: next });
+                          }} />
+                          <input className="input-field" placeholder="Reps" value={ex.reps} onChange={(e) => {
+                            const next = [...scheduleForm.days];
+                            next[dayIdx].exercises[exIdx].reps = e.target.value;
+                            setScheduleForm({ ...scheduleForm, days: next });
+                          }} />
+                          <input className="input-field" placeholder="Wt" value={ex.weight} onChange={(e) => {
+                            const next = [...scheduleForm.days];
+                            next[dayIdx].exercises[exIdx].weight = e.target.value;
+                            setScheduleForm({ ...scheduleForm, days: next });
+                          }} />
+                          <button style={{ color: 'var(--danger)', background: 'transparent', border: 0, cursor: 'pointer', padding: '4px' }} onClick={() => {
+                            const next = [...scheduleForm.days];
+                            next[dayIdx].exercises = next[dayIdx].exercises.filter((_, i) => i !== exIdx);
+                            setScheduleForm({ ...scheduleForm, days: next });
+                          }}><X size={16} /></button>
+                        </div>
+                      ))}
+                      <button className="btn btn-secondary" style={{ marginTop: '0.5rem', alignSelf: 'flex-start', padding: '6px 12px', fontSize: '0.85rem' }} onClick={() => {
+                        const next = [...scheduleForm.days];
+                        next[dayIdx].exercises.push({ name: '', sets: '', reps: '', weight: '' });
+                        setScheduleForm({ ...scheduleForm, days: next });
+                      }}>+ Add Exercise</button>
+                    </div>
+                  </div>
+                )}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '1rem', borderTop: '1px solid var(--border-color)', paddingTop: '1rem' }}>
-          <button className="btn btn-secondary" onClick={() => setScheduleForm({ ...scheduleForm, days: [...scheduleForm.days, emptyDay(scheduleForm.days.length)] })}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '1.5rem', borderTop: '1px solid var(--border-color)', paddingTop: '1.5rem' }}>
+          <button className="btn btn-secondary" onClick={() => {
+            const newDays = [...scheduleForm.days, emptyDay(scheduleForm.days.length)];
+            setScheduleForm({ ...scheduleForm, days: newDays });
+            setCreationExpandedDayIdx(newDays.length - 1);
+          }}>
             + Add Another Day
           </button>
-          <button className="btn btn-primary" onClick={createSchedule}>
+          <button className="btn btn-primary" onClick={createSchedule} style={{ minWidth: '140px' }}>
             Launch Program
           </button>
         </div>
       </Modal>
 
       {/* Quick Log Modal */}
-      {showQuickLog && (
-        <Modal isOpen={showQuickLog} onClose={() => setShowQuickLog(false)} title="Log Cardio / Activity">
-          <div className="form-grid">
-            <div className="input-group"><label className="input-label">Date</label><input className="input-field" type="date" value={dayLog.date} onChange={(e) => setDayLog({ ...dayLog, date: e.target.value })} /></div>
-            <div className="input-group"><label className="input-label">Type</label><select className="input-field" value={dayLog.status} onChange={(e) => setDayLog({ ...dayLog, status: e.target.value })}><option value="cardio">Cardio</option><option value="off_day">Rest Day</option><option value="missed">Missed Workout</option></select></div>
-          </div>
-          {dayLog.status === 'cardio' && (
-            <div className="input-group"><label className="input-label">Duration (minutes)</label><input className="input-field" type="number" value={dayLog.cardioMinutes} onChange={(e) => setDayLog({ ...dayLog, cardioMinutes: e.target.value })} /></div>
-          )}
-          <div className="input-group"><label className="input-label">Notes</label><input className="input-field" value={dayLog.note} onChange={(e) => setDayLog({ ...dayLog, note: e.target.value })} /></div>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 12 }}>
-            <button className="btn btn-secondary" onClick={() => setShowQuickLog(false)}>Cancel</button>
-            <button className="btn btn-primary" onClick={addDayLog}>Save Log</button>
-          </div>
-        </Modal>
-      )}
+      {
+        showQuickLog && (
+          <Modal isOpen={showQuickLog} onClose={() => setShowQuickLog(false)} title="Log Cardio / Activity">
+            <div className="form-grid">
+              <div className="input-group"><label className="input-label">Date</label><input className="input-field" type="date" value={dayLog.date} onChange={(e) => setDayLog({ ...dayLog, date: e.target.value })} /></div>
+              <div className="input-group"><label className="input-label">Type</label><select className="input-field" value={dayLog.status} onChange={(e) => setDayLog({ ...dayLog, status: e.target.value })}><option value="cardio">Cardio</option><option value="off_day">Rest Day</option><option value="missed">Missed Workout</option></select></div>
+            </div>
+            {dayLog.status === 'cardio' && (
+              <div className="input-group"><label className="input-label">Duration (minutes)</label><input className="input-field" type="number" value={dayLog.cardioMinutes} onChange={(e) => setDayLog({ ...dayLog, cardioMinutes: e.target.value })} /></div>
+            )}
+            <div className="input-group"><label className="input-label">Notes</label><input className="input-field" value={dayLog.note} onChange={(e) => setDayLog({ ...dayLog, note: e.target.value })} /></div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 12 }}>
+              <button className="btn btn-secondary" onClick={() => setShowQuickLog(false)}>Cancel</button>
+              <button className="btn btn-primary" onClick={addDayLog}>Save Log</button>
+            </div>
+          </Modal>
+        )
+      }
 
     </div>
   );

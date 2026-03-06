@@ -1,5 +1,7 @@
 const { Sequelize, DataTypes } = require('sequelize');
 const path = require('path');
+const bcrypt = require('bcryptjs');
+const { encrypt, decrypt } = require('../utils/encryption');
 require('dotenv').config(); // Load .env file
 
 let sequelize;
@@ -74,7 +76,7 @@ const Facility = sequelize.define('Facility', {
     },
     address: { type: DataTypes.STRING, allowNull: true },
     subscriptionStatus: {
-        type: DataTypes.ENUM('active', 'expired', 'suspended'),
+        type: DataTypes.ENUM('active', 'pending', 'blocked', 'suspended', 'expired'),
         defaultValue: 'active'
     },
     subscriptionExpiresAt: { type: DataTypes.DATE, allowNull: true },
@@ -133,6 +135,21 @@ const Notification = sequelize.define('Notification', {
     path: { type: DataTypes.STRING, allowNull: true } // Redirection path
 });
 
+// AutoPay event log for tracking Razorpay subscription events
+const FacilityAutoPayEvent = sequelize.define('FacilityAutoPayEvent', {
+    facilityId: { type: DataTypes.INTEGER, allowNull: false },
+    eventType: { type: DataTypes.STRING, allowNull: false }, // e.g. subscription.charged, payment.failed
+    razorpaySubscriptionId: { type: DataTypes.STRING, allowNull: true },
+    razorpayPaymentId: { type: DataTypes.STRING, allowNull: true },
+    amount: { type: DataTypes.FLOAT, allowNull: true },
+    currency: { type: DataTypes.STRING, defaultValue: 'INR' },
+    status: { type: DataTypes.STRING, allowNull: true },
+    method: { type: DataTypes.STRING, allowNull: true },
+    failureReason: { type: DataTypes.TEXT, allowNull: true },
+    paidAt: { type: DataTypes.DATE, allowNull: true },
+    payload: { type: DataTypes.JSON, allowNull: true }
+});
+
 // Relationships
 Facility.belongsTo(SubscriptionPlan, { foreignKey: 'subscriptionPlanId' });
 SubscriptionPlan.hasMany(Facility, { foreignKey: 'subscriptionPlanId' });
@@ -170,4 +187,67 @@ Attendance.belongsTo(Client, { foreignKey: 'clientId' });
 Facility.hasMany(Attendance, { foreignKey: 'facilityId' });
 Attendance.belongsTo(Facility, { foreignKey: 'facilityId' });
 
-module.exports = { sequelize, User, Facility, Client, Payment, Plan, SubscriptionPlan, Attendance, Notification, FacilityType };
+// FacilityAutoPayEvent relationships
+Facility.hasMany(FacilityAutoPayEvent, { foreignKey: 'facilityId' });
+FacilityAutoPayEvent.belongsTo(Facility, { foreignKey: 'facilityId' });
+
+// =============================================================================
+// MODEL HOOKS — Password Hashing & PII Encryption
+// =============================================================================
+
+// --- User: auto-hash password on create/update (bcrypt cost factor 12) ---
+// This ensures no route can accidentally store a plain-text password.
+const BCRYPT_ROUNDS = 12;
+
+User.addHook('beforeCreate', async (user) => {
+    if (user.password) {
+        user.password = await bcrypt.hash(user.password, BCRYPT_ROUNDS);
+    }
+});
+
+User.addHook('beforeUpdate', async (user) => {
+    // Only re-hash if the password field was explicitly changed
+    if (user.changed('password') && user.password) {
+        // Avoid double-hashing: if already a bcrypt hash, skip
+        if (!user.password.startsWith('$2')) {
+            user.password = await bcrypt.hash(user.password, BCRYPT_ROUNDS);
+        }
+    }
+});
+
+// --- Client: AES-256 encrypt/decrypt aadhaar_number (sensitive government ID) ---
+const ENCRYPTED_CLIENT_FIELDS = ['aadhaar_number'];
+
+const encryptClientFields = (client) => {
+    ENCRYPTED_CLIENT_FIELDS.forEach(field => {
+        if (client[field]) client[field] = encrypt(client[field]);
+    });
+};
+
+const decryptClientFields = (client) => {
+    if (!client) return;
+    ENCRYPTED_CLIENT_FIELDS.forEach(field => {
+        if (client[field]) client.setDataValue(field, decrypt(client[field]));
+    });
+};
+
+Client.addHook('beforeCreate', (client) => encryptClientFields(client));
+Client.addHook('beforeUpdate', (client) => {
+    ENCRYPTED_CLIENT_FIELDS.forEach(field => {
+        if (client.changed(field) && client[field]) {
+            client[field] = encrypt(client[field]);
+        }
+    });
+});
+
+// Decrypt after any find operation
+Client.addHook('afterFind', (result) => {
+    if (!result) return;
+    if (Array.isArray(result)) {
+        result.forEach(decryptClientFields);
+    } else {
+        decryptClientFields(result);
+    }
+});
+
+module.exports = { sequelize, User, Facility, Client, Payment, Plan, SubscriptionPlan, Attendance, Notification, FacilityType, FacilityAutoPayEvent };

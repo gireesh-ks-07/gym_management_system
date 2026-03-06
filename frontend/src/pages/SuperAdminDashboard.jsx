@@ -36,22 +36,35 @@ const SuperAdminDashboard = () => {
             style={{
                 display: 'flex',
                 flexDirection: 'column',
-                gap: '1rem',
+                gap: '1.25rem',
+                padding: '1.75rem',
                 cursor: path ? 'pointer' : 'default',
-                transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
+                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                minHeight: '160px',
+                justifyContent: 'space-between'
             }}
             onClick={() => path && navigate(path)}
         >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div>
-                    <h3 className="stat-title">{title}</h3>
-                    <div className="stat-value">{value}</div>
-                </div>
-                <div className="stat-icon" style={{ background: `${color}20`, color: color }}>
-                    <Icon size={24} />
+                <div style={{
+                    padding: '0.75rem',
+                    borderRadius: '16px',
+                    background: `${color}15`,
+                    color: color,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    boxShadow: `0 8px 16px -4px ${color}20`
+                }}>
+                    <Icon size={24} strokeWidth={2.5} />
                 </div>
             </div>
-            {subtext && <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{subtext}</div>}
+
+            <div>
+                <h3 style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', fontWeight: '600', letterSpacing: '0.01em', marginBottom: '4px' }}>{title}</h3>
+                <div style={{ fontSize: '1.75rem', fontWeight: '800', color: 'var(--text-highlight)', letterSpacing: '-0.02em' }}>{value}</div>
+                {subtext && <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px', fontWeight: '500' }}>{subtext}</div>}
+            </div>
         </div>
     );
 
@@ -215,6 +228,7 @@ const SuperAdminDashboard = () => {
                     </table>
                 </div>
             </div>
+
         </div>
     );
 };

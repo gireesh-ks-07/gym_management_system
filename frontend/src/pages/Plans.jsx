@@ -132,61 +132,81 @@ const Plans = () => {
                 </button>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '2rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1.5rem' }}>
                 {plans.map((plan, index) => (
                     <div className="card" key={plan.id} style={{
-                        padding: '2rem',
+                        padding: '0',
                         display: 'flex',
                         flexDirection: 'column',
                         position: 'relative',
-                        overflow: 'visible',
+                        borderRadius: '20px',
+                        overflow: 'hidden',
+                        border: '1px solid var(--border-color)',
+                        boxShadow: 'var(--shadow-md)',
                         animationDelay: `${index * 0.1}s`,
-                        borderTop: `4px solid ${index % 2 === 0 ? 'var(--primary)' : 'var(--accent-blue)'}`
+                        minHeight: '380px'
                     }}>
                         <div style={{
-                            position: 'absolute',
-                            top: '1rem',
-                            right: '3rem',
-                            background: 'rgba(255,255,255,0.1)',
-                            padding: '0.25rem 0.75rem',
-                            borderRadius: '20px',
-                            fontSize: '0.75rem',
-                            fontWeight: '600',
-                            color: 'var(--text-highlight)'
-                        }}>
-                            {plan.duration} Month{plan.duration > 1 ? 's' : ''}
-                        </div>
+                            height: '6px',
+                            background: index % 2 === 0
+                                ? 'linear-gradient(90deg, var(--primary), var(--primary-light))'
+                                : 'linear-gradient(90deg, #3B82F6, #60A5FA)'
+                        }}></div>
 
-                        <div style={{ position: 'absolute', top: '1rem', right: '0.5rem' }}>
-                            <ActionMenu
-                                onEdit={() => handleEditClick(plan)}
-                                onDelete={() => handleDeleteClick(plan.id)}
-                            />
-                        </div>
-
-                        <div style={{ marginBottom: '1.5rem', paddingRight: '2rem' }}>
-                            <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '0.5rem', color: 'var(--text-highlight)' }}>{plan.name}</h3>
-                            <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.25rem' }}>
-                                <span style={{ fontSize: '2.5rem', fontWeight: '800', color: 'var(--text-highlight)' }}>₹{plan.price}</span>
-                                <span style={{ fontSize: '1rem', color: 'var(--text-secondary)' }}>/ term</span>
+                        <div style={{ padding: '1.5rem', flex: 1, display: 'flex', flexDirection: 'column' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
+                                <div style={{
+                                    background: 'var(--bg-body)',
+                                    padding: '0.3rem 0.75rem',
+                                    borderRadius: '10px',
+                                    fontSize: '0.7rem',
+                                    fontWeight: '800',
+                                    color: 'var(--primary)',
+                                    textTransform: 'uppercase',
+                                    letterSpacing: '0.05em',
+                                    border: '1px solid var(--border-color)'
+                                }}>
+                                    {plan.duration} Mo Term
+                                </div>
+                                <ActionMenu
+                                    onEdit={() => handleEditClick(plan)}
+                                    onDelete={() => handleDeleteClick(plan.id)}
+                                />
                             </div>
-                        </div>
 
-                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', marginBottom: '2rem', lineHeight: '1.6', flex: 1 }}>
-                            {plan.description || 'Includes full facility access, locker usage, and steam room access.'}
-                        </p>
+                            <div style={{ marginBottom: '1rem' }}>
+                                <h3 style={{ fontSize: '1.25rem', fontWeight: '800', color: 'var(--text-highlight)', letterSpacing: '-0.01em', marginBottom: '0.25rem' }}>{plan.name}</h3>
+                                <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.3rem' }}>
+                                    <span style={{ fontSize: '1.75rem', fontWeight: '900', color: 'var(--text-highlight)', letterSpacing: '-0.02em' }}>₹{plan.price}</span>
+                                    <span style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', fontWeight: '600' }}>/ term</span>
+                                </div>
+                            </div>
 
-                        <div style={{ marginBottom: '2rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                            {plan.features && Array.isArray(plan.features) && plan.features.length > 0 ? (
-                                plan.features.map((feature, idx) => (
-                                    <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '0.9rem', color: 'var(--text-main)' }}>
-                                        <CheckCircle size={16} color="var(--primary)" />
-                                        <span>{feature}</span>
-                                    </div>
-                                ))
-                            ) : (
-                                <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', fontStyle: 'italic' }}>No specific features listed.</div>
-                            )}
+                            <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1.5rem', lineHeight: '1.5', flex: 1 }}>
+                                {plan.description || 'Includes full facility access and premium amenities.'}
+                            </p>
+
+                            <div style={{
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '0.75rem',
+                                padding: '1rem',
+                                background: 'var(--bg-body)',
+                                borderRadius: '16px',
+                                border: '1px solid var(--border-color)'
+                            }}>
+                                <div style={{ fontSize: '0.65rem', fontWeight: '800', textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: '0.1em', marginBottom: '0.1rem' }}>Features</div>
+                                {plan.features && Array.isArray(plan.features) && plan.features.length > 0 ? (
+                                    plan.features.slice(0, 3).map((feature, idx) => (
+                                        <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontSize: '0.85rem', color: 'var(--text-main)', fontWeight: '600' }}>
+                                            <CheckCircle size={16} color="var(--primary)" />
+                                            <span>{feature}</span>
+                                        </div>
+                                    ))
+                                ) : (
+                                    <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem', fontStyle: 'italic' }}>No features listed.</div>
+                                )}
+                            </div>
                         </div>
                     </div>
                 ))}

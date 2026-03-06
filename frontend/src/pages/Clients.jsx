@@ -372,24 +372,32 @@ const Clients = () => {
                 </div>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1.5rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '2rem' }}>
                 {filteredClients.map((client, index) => (
-                    <div className="card" key={client.id} style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem', animationDelay: `${index * 0.05}s` }}>
+                    <div className="card stat-card" key={client.id} style={{
+                        padding: '1.75rem',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '1.25rem',
+                        animationDelay: `${index * 0.05}s`,
+                        minHeight: '280px'
+                    }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                            <div style={{ display: 'flex', gap: '1rem' }}>
+                            <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
                                 <div style={{
-                                    width: '50px', height: '50px', borderRadius: '50%',
-                                    background: 'linear-gradient(135deg, var(--primary), var(--accent-blue))',
+                                    width: '56px', height: '56px', borderRadius: '16px',
+                                    background: 'linear-gradient(135deg, var(--primary), var(--primary-light))',
                                     display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                    color: 'white', fontWeight: 'bold', fontSize: '1.1rem',
-                                    boxShadow: '0 4px 10px rgba(0,0,0,0.2)'
+                                    color: 'white', fontWeight: '800', fontSize: '1.25rem',
+                                    boxShadow: '0 8px 16px var(--primary-glow)'
                                 }}>
                                     {client.name.charAt(0)}
                                 </div>
                                 <div>
-                                    <h3 style={{ fontSize: '1.1rem', fontWeight: '600', color: 'var(--text-highlight)' }}>{client.name}</h3>
-                                    <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                                        <Mail size={12} /> {client.email || 'No email'}
+                                    <h3 style={{ fontSize: '1.15rem', fontWeight: '700', color: 'var(--text-highlight)', letterSpacing: '-0.01em' }}>{client.name}</h3>
+                                    <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.4rem', marginTop: '2px' }}>
+                                        <Mail size={14} strokeWidth={2} />
+                                        <span style={{ opacity: 0.8 }}>{client.email || 'No email registered'}</span>
                                     </div>
                                 </div>
                             </div>
@@ -402,43 +410,63 @@ const Clients = () => {
                         </div>
 
                         <div style={{
-                            background: 'rgba(255,255,255,0.03)',
-                            padding: '1rem',
-                            borderRadius: 'var(--radius-sm)',
+                            background: 'var(--bg-body)',
+                            padding: '1.25rem',
+                            borderRadius: '16px',
                             border: '1px solid var(--border-color)',
                             display: 'grid',
                             gridTemplateColumns: '1fr 1fr',
-                            gap: '0.5rem'
+                            gap: '0.75rem',
+                            marginTop: '0.5rem'
                         }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-                                <Phone size={14} />
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: '500' }}>
+                                <Phone size={14} color="var(--primary)" />
                                 <span>{client.phone}</span>
                             </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-                                <Calendar size={14} />
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: '500' }}>
+                                <Calendar size={14} color="var(--primary)" />
                                 <span>{formatDate(client.joiningDate)}</span>
                             </div>
-                            {client.customFields && Object.entries(client.customFields).map(([key, value]) => (
-                                <div key={key} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-                                    <CheckSquare size={14} />
-                                    <span>{String(value)}</span>
-                                </div>
-                            ))}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: '500', gridColumn: 'span 2' }}>
+                                <Target size={14} color="var(--primary)" />
+                                <span>{client.Plan?.name || 'No active plan'}</span>
+                            </div>
                         </div>
 
-                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem' }}>
+                        <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem' }}>
                             <button
                                 className={`btn ${attendanceMap[client.id] ? 'btn-success' : 'btn-secondary'}`}
-                                style={{ flex: 1, padding: '0.5rem', fontSize: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}
+                                style={{
+                                    flex: 1,
+                                    padding: '0.65rem',
+                                    fontSize: '0.85rem',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    gap: '0.5rem',
+                                    borderRadius: '12px',
+                                    fontWeight: '700'
+                                }}
                                 onClick={() => handleAttendanceClick(client)}
                                 disabled={attendanceMap[client.id]}
                             >
                                 {attendanceMap[client.id] ? <CheckSquare size={16} /> : <Square size={16} />}
-                                {attendanceMap[client.id] ? 'Checked' : 'Check-in'}
+                                {attendanceMap[client.id] ? 'Check-in Done' : 'Check-in'}
                             </button>
                             <button
                                 className="btn btn-primary"
-                                style={{ flex: 1, padding: '0.5rem', fontSize: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}
+                                style={{
+                                    flex: 1,
+                                    padding: '0.65rem',
+                                    fontSize: '0.85rem',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    gap: '0.5rem',
+                                    borderRadius: '12px',
+                                    fontWeight: '700',
+                                    boxShadow: '0 4px 8px var(--primary-glow)'
+                                }}
                                 onClick={() => handlePaymentClick(client.id)}
                             >
                                 <CreditCard size={16} />
@@ -446,12 +474,19 @@ const Clients = () => {
                             </button>
                         </div>
 
-                        <div style={{ marginTop: 'auto', paddingTop: '0.5rem', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Status</span>
+                        <div style={{
+                            marginTop: 'auto',
+                            paddingTop: '1rem',
+                            borderTop: '1px solid var(--border-color)',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center'
+                        }}>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Member Status</span>
                             <span className={`status-badge ${client.status === 'active' ? 'status-active' :
                                 client.status === 'payment_due' ? 'status-payment-due' :
                                     'status-inactive'
-                                }`}>
+                                }`} style={{ padding: '4px 12px', borderRadius: '8px' }}>
                                 {client.status === 'active' ? 'Active' :
                                     client.status === 'payment_due' ? 'Payment Due' :
                                         'Inactive'}
@@ -553,14 +588,14 @@ const Clients = () => {
 
                     <div className="input-group" style={{ marginTop: '1rem' }}>
                         <label className="input-label">Address (Optional)</label>
-                            <textarea
-                                className="input-field"
-                                rows="2"
-                                value={formData.address || ''}
-                                onChange={e => setFormData({ ...formData, address: toTitleCase(e.target.value) })}
-                                placeholder="Full address"
-                                style={{ resize: 'vertical' }}
-                            />
+                        <textarea
+                            className="input-field"
+                            rows="2"
+                            value={formData.address || ''}
+                            onChange={e => setFormData({ ...formData, address: toTitleCase(e.target.value) })}
+                            placeholder="Full address"
+                            style={{ resize: 'vertical' }}
+                        />
                     </div>
 
                     {facility?.FacilityType?.memberFormConfig && facility.FacilityType.memberFormConfig.length > 0 && (
@@ -741,6 +776,7 @@ const Clients = () => {
                     </div>
                 </div>
             </Modal>
+
         </div>
     );
 };

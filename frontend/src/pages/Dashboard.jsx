@@ -52,13 +52,23 @@ const Dashboard = () => {
     useEffect(() => {
         fetchData();
 
+        // Debounced refresh on window focus (min 60s between refreshes)
+        let lastFocusRefresh = 0;
+        const onFocusRefresh = () => {
+            const now = Date.now();
+            if (now - lastFocusRefresh > 60_000) {
+                lastFocusRefresh = now;
+                fetchData();
+            }
+        };
+
         const onRefresh = () => fetchData();
         window.addEventListener('dashboard:refresh', onRefresh);
-        window.addEventListener('focus', onRefresh);
+        window.addEventListener('focus', onFocusRefresh);
 
         return () => {
             window.removeEventListener('dashboard:refresh', onRefresh);
-            window.removeEventListener('focus', onRefresh);
+            window.removeEventListener('focus', onFocusRefresh);
         };
     }, [fetchData]);
 
@@ -92,7 +102,8 @@ const Dashboard = () => {
                         const latest = await refreshFacilitySubscription();
                         setSubscription(latest);
                         addToast('AutoPay activated successfully.', 'success');
-                        window.location.reload();
+                        // Refresh dashboard data without full page reload
+                        await fetchData();
                     } catch (err) {
                         addToast(err.response?.data?.message || 'AutoPay verification failed.', 'error');
                     }
@@ -178,7 +189,7 @@ const Dashboard = () => {
     const memberLimitExceeded = memberLimit !== null && Number(stats.totalClients) >= Number(memberLimit);
     const staffLimitExceeded = staffLimit !== null && Number(stats.activeStaff) >= Number(staffLimit);
 
-    const COLORS = ['#22c55e', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6'];
+    const COLORS = ['var(--primary)', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6'];
 
     // Mock sparkline data since we don't have real historical data for all KPIs
     const Sparkline = ({ color }) => (
@@ -196,34 +207,52 @@ const Dashboard = () => {
 
     const StatCard = ({ title, value, icon, color, trend, path }) => (
         <div
-            className="card"
+            className="card stat-card"
             style={{
-                padding: '1.5rem',
+                padding: '1.75rem',
                 position: 'relative',
                 overflow: 'hidden',
                 cursor: path ? 'pointer' : 'default',
-                transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
+                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'space-between',
+                minHeight: '160px'
             }}
             onClick={() => path && navigate(path)}
         >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div style={{ padding: '0.75rem', borderRadius: '12px', background: `${color}15`, color: color }}>
-                    {icon}
+                <div style={{
+                    padding: '0.75rem',
+                    borderRadius: '16px',
+                    background: `${color}15`,
+                    color: color,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    boxShadow: `0 8px 16px -4px ${color}20`
+                }}>
+                    {React.cloneElement(icon, { size: 24, strokeWidth: 2.5 })}
                 </div>
                 {trend && (
-                    <div className={`stat-trend ${trend > 0 ? 'trend-up' : 'trend-down'}`}>
-                        {trend > 0 ? <TrendingUp size={14} /> : <TrendingUp size={14} style={{ transform: 'rotate(180deg)' }} />}
+                    <div className={`stat-trend ${trend > 0 ? 'trend-up' : 'trend-down'}`} style={{
+                        padding: '4px 8px',
+                        background: trend > 0 ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                        borderRadius: '8px',
+                        fontSize: '0.75rem'
+                    }}>
+                        {trend > 0 ? <TrendingUp size={12} /> : <TrendingUp size={12} style={{ transform: 'rotate(180deg)' }} />}
                         {Math.abs(trend)}%
                     </div>
                 )}
             </div>
 
-            <div style={{ marginTop: '1rem' }}>
-                <h3 style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', fontWeight: '500' }}>{title}</h3>
-                <div className="stat-card-value">{value}</div>
+            <div style={{ marginTop: '1.25rem' }}>
+                <h3 style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', fontWeight: '600', letterSpacing: '0.01em', marginBottom: '4px' }}>{title}</h3>
+                <div style={{ fontSize: '1.75rem', fontWeight: '800', color: 'var(--text-highlight)', letterSpacing: '-0.02em' }}>{value}</div>
             </div>
 
-            <div style={{ position: 'absolute', bottom: '1rem', right: '1rem' }}>
+            <div style={{ position: 'absolute', bottom: '-5px', right: '-10px', opacity: 0.5 }}>
                 <Sparkline color={color} />
             </div>
         </div>
@@ -292,7 +321,6 @@ const Dashboard = () => {
                     value={stats.totalClients}
                     icon={<Users size={24} />}
                     color="#22c55e"
-                    trend={12.5}
                     path="/clients"
                 />
                 <StatCard
@@ -300,7 +328,6 @@ const Dashboard = () => {
                     value={`₹${stats.totalRevenue.toLocaleString()}`}
                     icon={<Wallet size={24} />}
                     color="#10B981"
-                    trend={8.2}
                     path="/payments"
                 />
                 <StatCard
@@ -360,10 +387,12 @@ const Dashboard = () => {
                                         backgroundColor: 'var(--bg-card)',
                                         borderRadius: '12px',
                                         border: '1px solid var(--border-color)',
-                                        boxShadow: 'var(--shadow-xl)',
-                                        color: 'var(--text-main)'
+                                        boxShadow: 'var(--shadow-lg)',
+                                        color: 'var(--text-main)',
+                                        padding: '12px'
                                     }}
-                                    itemStyle={{ color: 'var(--primary)' }}
+                                    itemStyle={{ color: 'var(--primary)', fontWeight: 'bold' }}
+                                    labelStyle={{ color: 'var(--text-secondary)', marginBottom: '4px' }}
                                     formatter={(value) => [`₹${value.toLocaleString()}`, "Revenue"]}
                                 />
                                 <Area
@@ -480,6 +509,7 @@ const Dashboard = () => {
                     </table>
                 </div>
             </div>
+
         </div>
     );
 };

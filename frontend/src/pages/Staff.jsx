@@ -140,15 +140,15 @@ const Staff = () => {
                 </button>
             </div>
 
-            <div className="card" style={{ padding: '0', overflow: 'visible' }}>
-                <div className="table-wrapper" style={{ overflowX: 'auto', overflowY: 'visible', minHeight: '300px' }}>
+            <div className="card" style={{ padding: '0', overflow: 'hidden', border: '1px solid var(--border-color)', boxShadow: 'var(--shadow-lg)', borderRadius: '16px' }}>
+                <div className="table-wrapper" style={{ overflowX: 'auto' }}>
                     <table className="modern-table">
                         <thead>
                             <tr>
                                 <th style={{ paddingLeft: '2rem' }}>Staff Member</th>
-                                <th>Contact Email</th>
-                                <th>Role</th>
-                                <th>Date Joined</th>
+                                <th>Contact Details</th>
+                                <th>Access Role</th>
+                                <th>Member Since</th>
                                 <th>Status</th>
                                 <th style={{ textAlign: 'right', paddingRight: '2rem' }}>Actions</th>
                             </tr>
@@ -159,49 +159,57 @@ const Staff = () => {
                                     <td style={{ paddingLeft: '2rem' }}>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                                             <div style={{
-                                                width: '40px', height: '40px', borderRadius: '12px',
-                                                background: 'rgba(59, 130, 246, 0.1)',
+                                                width: '44px', height: '44px', borderRadius: '14px',
+                                                background: 'var(--primary-glow)',
                                                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                                color: 'var(--accent-blue)'
+                                                color: 'var(--primary)',
+                                                fontWeight: 'bold',
+                                                fontSize: '1.1rem'
                                             }}>
-                                                <UserCog size={20} />
+                                                {s.name.charAt(0)}
                                             </div>
                                             <div>
-                                                <div style={{ fontWeight: '600', color: 'var(--text-main)' }}>{s.name}</div>
-                                                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>ID: #{s.id}</div>
+                                                <div style={{ fontWeight: '700', color: 'var(--text-highlight)', fontSize: '1rem' }}>{s.name}</div>
+                                                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: '600' }}>#{s.id.toString().padStart(4, '0')}</div>
                                             </div>
                                         </div>
                                     </td>
                                     <td>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-                                            <Mail size={14} />
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', color: 'var(--text-main)', fontSize: '0.9rem', marginBottom: '4px', fontWeight: '500' }}>
+                                            <Mail size={14} color="var(--primary)" />
                                             {s.email}
                                         </div>
                                         {s.phone && (
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '0.25rem' }}>
-                                                <Phone size={14} />
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                                                <Phone size={14} color="var(--primary)" />
                                                 {s.phone}
                                             </div>
                                         )}
                                     </td>
                                     <td>
                                         <span className="status-badge" style={{
-                                            background: 'rgba(139, 92, 246, 0.1)',
-                                            color: '#a78bfa',
-                                            borderColor: 'rgba(139, 92, 246, 0.2)'
+                                            background: 'var(--bg-body)',
+                                            color: 'var(--text-main)',
+                                            borderColor: 'var(--border-color)',
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '6px',
+                                            padding: '4px 12px',
+                                            borderRadius: '8px',
+                                            fontWeight: '600',
+                                            fontSize: '0.8rem'
                                         }}>
-                                            <Shield size={12} style={{ marginRight: '4px' }} />
+                                            <Shield size={12} color="var(--primary)" />
                                             {s.role ? s.role.charAt(0).toUpperCase() + s.role.slice(1) : 'Staff'}
                                         </span>
                                     </td>
                                     <td>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-                                            <Calendar size={14} />
+                                        <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', fontWeight: '500' }}>
                                             {formatDate(s.createdAt)}
                                         </div>
                                     </td>
                                     <td>
-                                        <span className="status-badge status-active">Active</span>
+                                        <span className="status-badge status-active" style={{ padding: '4px 12px', borderRadius: '8px' }}>Active</span>
                                     </td>
                                     <td style={{ textAlign: 'right', paddingRight: '2rem' }}>
                                         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
@@ -215,8 +223,11 @@ const Staff = () => {
                             ))}
                             {staff.length === 0 && (
                                 <tr>
-                                    <td colSpan="6" style={{ textAlign: 'center', padding: '4rem', color: 'var(--text-muted)' }}>
-                                        No staff members found. Add your first staff member!
+                                    <td colSpan="6" style={{ textAlign: 'center', padding: '5rem', color: 'var(--text-muted)' }}>
+                                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem' }}>
+                                            <UserCog size={48} style={{ opacity: 0.1 }} />
+                                            <p>No staff members found. Add your first staff member!</p>
+                                        </div>
                                     </td>
                                 </tr>
                             )}
@@ -271,7 +282,7 @@ const Staff = () => {
                     </div>
                 </form>
             </Modal>
-        </div >
+        </div>
     );
 };
 

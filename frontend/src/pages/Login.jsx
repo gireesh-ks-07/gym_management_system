@@ -49,29 +49,48 @@ const Login = () => {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            background: 'radial-gradient(circle at center, #1e293b 0%, #0f172a 100%)',
-            padding: '1rem'
+            background: 'var(--gradient-dashboard)',
+            padding: '1.5rem',
+            transition: 'background var(--transition-base)'
         }}>
-            <div className="card animate-slide-up" style={{ width: '100%', maxWidth: '440px', padding: '2.5rem', border: '1px solid var(--border-color)' }}>
+            <div className="card animate-fade-in" style={{
+                width: '100%',
+                maxWidth: '440px',
+                padding: '3rem 2.5rem',
+                border: '1px solid var(--border-color)',
+                boxShadow: 'var(--shadow-lg)',
+                background: 'var(--bg-card)',
+                backdropFilter: 'blur(10px)'
+            }}>
                 <div style={{ textAlign: 'center', marginBottom: '2.5rem' }}>
-                    <img
-                        src="/logo_with_image.svg"
-                        alt="MobileMonks"
-                        style={{ width: '180px', maxWidth: '100%', margin: '0 auto 1.25rem', display: 'block' }}
-                    />
-                    <p style={{ color: 'var(--text-secondary)' }}>Sign in to manage your empire</p>
+                    <div style={{
+                        margin: '0 auto 1.5rem',
+                        width: '64px',
+                        height: '64px',
+                        background: 'var(--primary)',
+                        borderRadius: '16px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        boxShadow: '0 8px 16px var(--primary-glow)'
+                    }}>
+                        <Lock size={32} color="white" strokeWidth={2.5} />
+                    </div>
+                    <h1 style={{ fontSize: '1.75rem', fontWeight: '800', color: 'var(--text-highlight)', marginBottom: '0.5rem', letterSpacing: '-0.02em' }}>Welcome Back</h1>
+                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem' }}>Sign in to manage your gym ecosystem</p>
                 </div>
 
                 {error && (
                     <div className="animate-fade-in" style={{
                         background: 'rgba(239, 68, 68, 0.1)',
-                        color: '#fca5a5',
-                        padding: '1rem',
+                        color: 'var(--danger)',
+                        padding: '0.875rem',
                         borderRadius: 'var(--radius-sm)',
                         marginBottom: '1.5rem',
                         fontSize: '0.875rem',
                         textAlign: 'center',
-                        border: '1px solid rgba(239, 68, 68, 0.2)'
+                        border: '1px solid rgba(239, 68, 68, 0.2)',
+                        fontWeight: '500'
                     }}>
                         {error}
                     </div>
@@ -102,26 +121,32 @@ const Login = () => {
                             placeholder="••••••••"
                             leftIcon={<Lock size={18} />}
                         />
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
+                            <span style={{ color: 'var(--primary)', fontSize: '0.85rem', cursor: 'pointer', fontWeight: '500' }}>Forgot password?</span>
+                        </div>
                     </div>
 
                     <button
                         type="submit"
                         className="btn btn-primary"
-                        style={{ width: '100%', padding: '1rem', marginTop: '1rem', justifyContent: 'center' }}
+                        style={{
+                            width: '100%',
+                            padding: '1rem',
+                            marginTop: '1.5rem',
+                            justifyContent: 'center',
+                            fontSize: '1rem',
+                            boxShadow: '0 4px 12px var(--primary-glow)'
+                        }}
                         disabled={loading}
                     >
-                        {loading ? 'Signing in...' : 'Sign In'}
+                        <span>{loading ? 'Signing in...' : 'Sign In'}</span>
                         {!loading && <ArrowRight size={18} />}
                     </button>
                 </form>
 
-                <div style={{ marginTop: '2rem', textAlign: 'center', fontSize: '0.875rem', color: 'var(--text-muted)' }}>
-                    <p>Forgot password? <span style={{ color: 'var(--primary)', cursor: 'pointer' }}>Reset it</span></p>
-                </div>
-
                 <div style={{
-                    marginTop: '1.5rem',
-                    paddingTop: '1rem',
+                    marginTop: '2.5rem',
+                    paddingTop: '1.5rem',
                     borderTop: '1px solid var(--border-color)',
                     display: 'flex',
                     alignItems: 'center',
@@ -129,10 +154,12 @@ const Login = () => {
                     gap: '0.6rem',
                     color: 'var(--text-muted)',
                     fontSize: '0.8rem',
-                    letterSpacing: '0.04em'
+                    letterSpacing: '0.04em',
+                    fontWeight: '600',
+                    textTransform: 'uppercase'
                 }}>
-                    <img src="/mobilemonks-logo.png" alt="MobileMonks" style={{ width: '28px', height: '28px', borderRadius: '999px' }} />
-                    <span>Powered by MobileMonks</span>
+                    <div style={{ width: '24px', height: '24px', background: 'var(--text-muted)', borderRadius: '6px', opacity: 0.2 }}></div>
+                    <span>Powered by OpsMonks</span>
                 </div>
             </div>
         </div>
