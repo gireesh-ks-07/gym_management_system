@@ -8,10 +8,12 @@ import { useToast } from '../context/ToastContext';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { formatDate } from '../utils/date';
 import { toTitleCase } from '../utils/textCase';
+import { useAuth } from '../context/AuthContext';
 
 const Staff = () => {
+    // Facility/plan limits come from AuthContext instead of a per-load fetch.
+    const { facilitySubscription: facility } = useAuth();
     const [staff, setStaff] = useState([]);
-    const [facility, setFacility] = useState(null);
     const [showModal, setShowModal] = useState(false);
     const [isEditMode, setIsEditMode] = useState(false);
     const [currentStaffId, setCurrentStaffId] = useState(null);
@@ -24,12 +26,8 @@ const Staff = () => {
 
     const fetchStaff = async () => {
         try {
-            const [staffRes, facilityRes] = await Promise.all([
-                api.get('/staff'),
-                api.get('/facility/subscription').catch(() => null),
-            ]);
+            const staffRes = await api.get('/staff');
             setStaff(staffRes.data);
-            setFacility(facilityRes?.data || null);
         } catch (err) {
             console.error(err);
             addToast('Failed to fetch staff list', 'error');
@@ -39,14 +37,6 @@ const Staff = () => {
     useEffect(() => {
         fetchStaff();
     }, []);
-
-    useEffect(() => {
-        const queryParams = new URLSearchParams(location.search);
-        if (queryParams.get('action') === 'add') {
-            handleAddClick();
-            navigate(location.pathname, { replace: true });
-        }
-    }, [location, navigate]);
 
     const handleAddClick = () => {
         const staffLimit = facility?.SubscriptionPlan?.maxStaff ?? facility?.subscriptionPlan?.maxStaff ?? null;
@@ -59,6 +49,15 @@ const Staff = () => {
         setFormData({ name: '', email: '', password: '', role: 'staff', phone: '' });
         setShowModal(true);
     };
+
+    useEffect(() => {
+        const queryParams = new URLSearchParams(location.search);
+        if (queryParams.get('action') === 'add') {
+            handleAddClick();
+            navigate(location.pathname, { replace: true });
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [location, navigate]);
 
     const handleEditClick = (s) => {
         setIsEditMode(true);
@@ -73,7 +72,7 @@ const Staff = () => {
             addToast('Staff member deleted successfully', 'success');
             fetchStaff();
             triggerDashboardRefresh();
-        } catch (err) {
+        } catch {
             addToast('Failed to delete staff member', 'error');
         }
     };

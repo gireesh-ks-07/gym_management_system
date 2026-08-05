@@ -3,6 +3,25 @@ import api from '../api';
 import { User, DollarSign, Wallet, RefreshCw, CreditCard, PieChart } from 'lucide-react';
 import { formatDate } from '../utils/date';
 
+// Defined at module scope (not inside Reports) so it isn't recreated on every
+// render — a fresh component identity each render remounts and resets state.
+const StatCard = ({ title, value, icon, color }) => (
+    <div className="card stat-card" style={{ padding: '1.5rem', display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
+        <div style={{
+            width: '60px', height: '60px', borderRadius: '16px',
+            background: color + '20', color: color,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            boxShadow: `0 4px 12px ${color}30`
+        }}>
+            {icon}
+        </div>
+        <div>
+            <div style={{ fontSize: '1.75rem', fontWeight: 'bold', color: 'var(--text-highlight)' }}>{value}</div>
+            <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>{title}</div>
+        </div>
+    </div>
+);
+
 const Reports = () => {
     const [stats, setStats] = useState({
         revenue: { total: 0, cash: 0, upi: 0 },
@@ -25,23 +44,6 @@ const Reports = () => {
     useEffect(() => {
         fetchStats();
     }, []);
-
-    const StatCard = ({ title, value, icon, color }) => (
-        <div className="card stat-card" style={{ padding: '1.5rem', display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
-            <div style={{
-                width: '60px', height: '60px', borderRadius: '16px',
-                background: color + '20', color: color,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                boxShadow: `0 4px 12px ${color}30`
-            }}>
-                {icon}
-            </div>
-            <div>
-                <div style={{ fontSize: '1.75rem', fontWeight: 'bold', color: 'var(--text-highlight)' }}>{value}</div>
-                <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>{title}</div>
-            </div>
-        </div>
-    );
 
     return (
         <div className="animate-fade-in">

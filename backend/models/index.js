@@ -7,13 +7,17 @@ require('dotenv').config(); // Load .env file
 let sequelize;
 
 if (process.env.DATABASE_URL) {
+    // Validate the DB server certificate by default. Only disable when the
+    // deployment explicitly opts out (e.g. a provider with self-signed certs)
+    // via DB_SSL_REJECT_UNAUTHORIZED=false. Never silently accept any cert.
+    const rejectUnauthorized = process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false';
     sequelize = new Sequelize(process.env.DATABASE_URL, {
         dialect: 'postgres',
         logging: false,
         dialectOptions: {
             ssl: {
                 require: true,
-                rejectUnauthorized: false
+                rejectUnauthorized
             }
         }
     });
@@ -80,12 +84,34 @@ const Facility = sequelize.define('Facility', {
         defaultValue: 'active'
     },
     subscriptionExpiresAt: { type: DataTypes.DATE, allowNull: true },
-    healthProfileEnabled: { type: DataTypes.BOOLEAN, defaultValue: false }
+    healthProfileEnabled: { type: DataTypes.BOOLEAN, defaultValue: false },
+    // Add-on feature packages — controlled by super-admin per facility
+    modules: {
+        type: DataTypes.JSON,
+        defaultValue: {
+            healthPro: false,    // Body fat history, measurements, fitness tests, mobility, goal reviews, strength PRs
+            paymentsPro: false   // Online payments, proper invoices
+        }
+    },
+    // --- Razorpay AutoPay fields (added by migration 20260218113923) ---
+    // These MUST be declared on the model, otherwise Sequelize neither selects
+    // nor persists them — which silently breaks subscription sync and causes the
+    // frontend to keep re-fetching /facility/subscription in a loop.
+    razorpayPlanId: { type: DataTypes.STRING, allowNull: true },
+    razorpaySubscriptionId: { type: DataTypes.STRING, allowNull: true },
+    razorpaySubscriptionStatus: { type: DataTypes.STRING, allowNull: true },
+    autopayAuthorizedAt: { type: DataTypes.DATE, allowNull: true },
+    autopayCancelledAt: { type: DataTypes.DATE, allowNull: true },
+    lastAutopayFailureAt: { type: DataTypes.DATE, allowNull: true },
+    lastAutopayFailureReason: { type: DataTypes.TEXT, allowNull: true }
 });
 
 const Client = sequelize.define('Client', {
     name: { type: DataTypes.STRING, allowNull: false },
     email: { type: DataTypes.STRING, allowNull: true },
+    password: { type: DataTypes.STRING, allowNull: true }, // Added for client app auth
+    resetPasswordToken: { type: DataTypes.STRING, allowNull: true },
+    resetPasswordExpires: { type: DataTypes.DATE, allowNull: true },
     phone: { type: DataTypes.STRING, allowNull: false },
     height: { type: DataTypes.FLOAT, allowNull: true },
     weight: { type: DataTypes.FLOAT, allowNull: true },
@@ -115,7 +141,10 @@ const Payment = sequelize.define('Payment', {
     amount: { type: DataTypes.FLOAT, allowNull: false },
     method: { type: DataTypes.ENUM('cash', 'upi'), allowNull: false },
     date: { type: DataTypes.DATEONLY, defaultValue: DataTypes.NOW },
-    transactionId: { type: DataTypes.STRING, allowNull: true } // Captured for UPI
+    transactionId: { type: DataTypes.STRING, allowNull: true }, // Captured for UPI
+    paymentId: { type: DataTypes.STRING, allowNull: true },     // Razorpay payment ID
+    invoiceNumber: { type: DataTypes.STRING, allowNull: true }, // Auto-generated invoice number
+    planId: { type: DataTypes.INTEGER, allowNull: true }        // Plan at time of payment
 });
 
 const Plan = sequelize.define('Plan', {
@@ -131,6 +160,7 @@ const Notification = sequelize.define('Notification', {
     type: { type: DataTypes.STRING, defaultValue: 'info' }, // info, warning, success, error
     role: { type: DataTypes.STRING, allowNull: true }, // Targeted role (e.g., superadmin)
     facilityId: { type: DataTypes.INTEGER, allowNull: true }, // Targeted facility
+    clientId: { type: DataTypes.INTEGER, allowNull: true }, // Targeted member (client app / gamification)
     isRead: { type: DataTypes.BOOLEAN, defaultValue: false },
     path: { type: DataTypes.STRING, allowNull: true } // Redirection path
 });
@@ -175,6 +205,9 @@ Payment.belongsTo(Facility, { foreignKey: 'facilityId' });
 User.hasMany(Payment, { as: 'processedPayments', foreignKey: 'processedBy' });
 Payment.belongsTo(User, { as: 'processor', foreignKey: 'processedBy' });
 
+Plan.hasMany(Payment, { foreignKey: 'planId' });
+Payment.belongsTo(Plan, { foreignKey: 'planId' });
+
 Facility.hasMany(Plan, { foreignKey: 'facilityId' });
 Plan.belongsTo(Facility, { foreignKey: 'facilityId' });
 
@@ -200,7 +233,7 @@ FacilityAutoPayEvent.belongsTo(Facility, { foreignKey: 'facilityId' });
 const BCRYPT_ROUNDS = 12;
 
 User.addHook('beforeCreate', async (user) => {
-    if (user.password) {
+    if (user.password && !user.password.startsWith('$2')) {
         user.password = await bcrypt.hash(user.password, BCRYPT_ROUNDS);
     }
 });
@@ -231,13 +264,23 @@ const decryptClientFields = (client) => {
     });
 };
 
-Client.addHook('beforeCreate', (client) => encryptClientFields(client));
-Client.addHook('beforeUpdate', (client) => {
+Client.addHook('beforeCreate', async (client) => {
+    encryptClientFields(client);
+    if (client.password && !client.password.startsWith('$2')) {
+        client.password = await bcrypt.hash(client.password, BCRYPT_ROUNDS);
+    }
+});
+
+Client.addHook('beforeUpdate', async (client) => {
     ENCRYPTED_CLIENT_FIELDS.forEach(field => {
         if (client.changed(field) && client[field]) {
             client[field] = encrypt(client[field]);
         }
     });
+    
+    if (client.changed('password') && client.password && !client.password.startsWith('$2')) {
+        client.password = await bcrypt.hash(client.password, BCRYPT_ROUNDS);
+    }
 });
 
 // Decrypt after any find operation
@@ -250,4 +293,18 @@ Client.addHook('afterFind', (result) => {
     }
 });
 
-module.exports = { sequelize, User, Facility, Client, Payment, Plan, SubscriptionPlan, Attendance, Notification, FacilityType, FacilityAutoPayEvent };
+// =============================================================================
+// GAMIFICATION MODELS
+// Registered here so a single Sequelize instance owns every model and
+// sequelize.sync() creates all gamification tables. Defined via a factory to
+// avoid a circular require between this file and the gamification module.
+// =============================================================================
+const { defineGamificationModels } = require('../gamification/models');
+const gamificationModels = defineGamificationModels(sequelize, { Client, Facility, User, Notification });
+
+module.exports = {
+    sequelize,
+    User, Facility, Client, Payment, Plan, SubscriptionPlan,
+    Attendance, Notification, FacilityType, FacilityAutoPayEvent,
+    ...gamificationModels
+};

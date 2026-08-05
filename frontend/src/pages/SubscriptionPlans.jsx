@@ -113,7 +113,7 @@ const SubscriptionPlans = () => {
             setFormData({ name: '', price: '', duration: '', maxMembers: '', maxStaff: '', description: '' });
             setShowModal(false);
             fetchPlans();
-        } catch (err) {
+        } catch {
             addToast(isEditMode ? 'Failed to update plan' : 'Failed to create plan', 'error');
         }
     };

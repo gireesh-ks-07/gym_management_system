@@ -22,6 +22,7 @@ const Facilities = () => {
     // Updated subscription modal state to hold full facility object and tab
     const [subscriptionModal, setSubscriptionModal] = useState({ isOpen: false, facility: null, tab: 'plan' });
     const [manualData, setManualData] = useState({ status: '', expiresAt: '' });
+    const [packagesData, setPackagesData] = useState({ healthPro: false });
 
     const { addToast, showConfirm } = useToast();
     const [passwordModal, setPasswordModal] = useState({ isOpen: false, facilityId: null, newPassword: '' });
@@ -94,7 +95,7 @@ const Facilities = () => {
             await api.delete(`/facilities/${facilityId}`);
             addToast('Facility deleted successfully', 'success');
             fetchFacilities();
-        } catch (err) {
+        } catch {
             addToast('Failed to delete facility', 'error');
         }
     };
@@ -152,7 +153,7 @@ const Facilities = () => {
             setShowModal(false);
             setFormData({ name: '', address: '', adminEmail: '', adminPassword: '', adminName: '', planId: '', facilityTypeId: '', healthProfileEnabled: false });
             fetchFacilities();
-        } catch (err) {
+        } catch {
             addToast(isEditMode ? 'Failed to update facility' : 'Failed to create facility', 'error');
         }
     };
@@ -160,6 +161,7 @@ const Facilities = () => {
     const openSubscriptionModal = (facility) => {
         const expires = facility.subscriptionExpiresAt ? new Date(facility.subscriptionExpiresAt).toISOString().split('T')[0] : '';
         setManualData({ status: facility.subscriptionStatus, expiresAt: expires });
+        setPackagesData(facility.modules || { healthPro: false });
         setSubscriptionModal({ isOpen: true, facility: facility, tab: 'plan', selectedPlanId: facility.subscriptionPlanId });
     };
 
@@ -170,7 +172,7 @@ const Facilities = () => {
             addToast('Plan assigned successfully', 'success');
             setSubscriptionModal({ ...subscriptionModal, isOpen: false });
             fetchFacilities();
-        } catch (err) {
+        } catch {
             addToast('Failed to assign plan', 'error');
         }
     };
@@ -183,11 +185,21 @@ const Facilities = () => {
             addToast('Subscription updated successfully', 'success');
             setSubscriptionModal({ ...subscriptionModal, isOpen: false });
             fetchFacilities();
-        } catch (err) {
+        } catch {
             addToast('Failed to update subscription', 'error');
         }
     };
 
+    const handlePackagesUpdate = async () => {
+        try {
+            await api.put(`/facilities/${subscriptionModal.facility.id}`, { modules: packagesData });
+            addToast('Packages updated successfully', 'success');
+            setSubscriptionModal({ ...subscriptionModal, isOpen: false });
+            fetchFacilities();
+        } catch {
+            addToast('Failed to update packages', 'error');
+        }
+    };
 
     const handleResetPassword = async (e) => {
         e.preventDefault();
@@ -606,9 +618,25 @@ const Facilities = () => {
                         >
                             Manual Override
                         </button>
+                        <button
+                            style={{
+                                padding: '0.75rem 1rem',
+                                borderBottom: subscriptionModal.tab === 'packages' ? '2px solid var(--primary)' : '2px solid transparent',
+                                color: subscriptionModal.tab === 'packages' ? 'var(--primary)' : 'var(--text-secondary)',
+                                fontWeight: '500',
+                                background: 'transparent',
+                                border: 'none',
+                                borderBottomWidth: '2px',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s'
+                            }}
+                            onClick={() => setSubscriptionModal({ ...subscriptionModal, tab: 'packages' })}
+                        >
+                            Packages
+                        </button>
                     </div>
 
-                    {subscriptionModal.tab === 'plan' ? (
+                    {subscriptionModal.tab === 'plan' && (
                         <div>
                             <div className="input-group">
                                 <label className="input-label">Assign Plan</label>
@@ -631,7 +659,9 @@ const Facilities = () => {
                                 <button className="btn btn-primary" onClick={handlePlanChange}>Update Plan</button>
                             </div>
                         </div>
-                    ) : (
+                    )}
+                    
+                    {subscriptionModal.tab === 'manual' && (
                         <div>
                             <div className="input-group">
                                 <label className="input-label">Subscription Status</label>
@@ -659,7 +689,32 @@ const Facilities = () => {
                             </div>
                             <div className="form-grid">
                                 <button className="btn btn-secondary" onClick={() => setSubscriptionModal({ ...subscriptionModal, isOpen: false })}>Cancel</button>
-                                <button className="btn btn-primary" onClick={handleManualUpdate}>Save Changes</button>
+                                <button className="btn btn-primary" onClick={handleManualUpdate}>Update</button>
+                            </div>
+                        </div>
+                    )}
+                    
+                    {subscriptionModal.tab === 'packages' && (
+                        <div>
+                            <div className="input-group">
+                                <label className="input-label">Available Modules</label>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer', padding: '1rem', border: '1px solid var(--border-color)', borderRadius: '12px', background: 'rgba(255,255,255,0.03)' }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={Boolean(packagesData.healthPro)}
+                                        onChange={e => setPackagesData({ ...packagesData, healthPro: e.target.checked })}
+                                    />
+                                    <div>
+                                        <div style={{ fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Health Pro (Phase 2)</div>
+                                        <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                                            Enables Body Composition, Measurement Logs, Personal Records, Fitness Tests, Mobility Screenings, and Goal Reviews.
+                                        </div>
+                                    </div>
+                                </label>
+                            </div>
+                            <div className="form-grid">
+                                <button className="btn btn-secondary" onClick={() => setSubscriptionModal({ ...subscriptionModal, isOpen: false })}>Cancel</button>
+                                <button className="btn btn-primary" onClick={handlePackagesUpdate}>Save Packages</button>
                             </div>
                         </div>
                     )}

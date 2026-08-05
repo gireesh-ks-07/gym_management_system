@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import api from '../api';
-import { Plus, Search, User, Phone, Ruler, Weight, Calendar, Mail, Filter, CreditCard, CheckSquare, Square, HeartPulse, Target, Repeat2, ClipboardList } from 'lucide-react';
+import { Plus, Search, User, Phone, Ruler, Weight, Calendar, Mail, Filter, CreditCard, CheckSquare, Square, HeartPulse, Target, Repeat2, ClipboardList, AlertCircle } from 'lucide-react';
 import { useToast } from '../context/ToastContext';
 import ActionMenu from '../components/ActionMenu';
 import Modal from '../components/Modal';
@@ -9,8 +9,13 @@ import AttendanceHistoryModal from '../components/AttendanceHistoryModal';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { formatDate } from '../utils/date';
 import { toTitleCase } from '../utils/textCase';
+import { useAuth } from '../context/AuthContext';
 
 const Clients = () => {
+    // Facility config (custom fields, health toggle) comes from AuthContext so
+    // this page doesn't re-fetch /facility/subscription on every load.
+    const { facilitySubscription: facility } = useAuth();
+    const healthEnabled = Boolean(facility?.healthProfileEnabled || facility?.modules?.healthPro);
     const [clients, setClients] = useState([]);
     const { addToast, showConfirm } = useToast();
     const [showModal, setShowModal] = useState(false);
@@ -20,7 +25,6 @@ const Clients = () => {
     const [statusFilter, setStatusFilter] = useState('all');
     const [planFilter, setPlanFilter] = useState('all');
     const [plans, setPlans] = useState([]);
-    const [facility, setFacility] = useState(null);
     const [formData, setFormData] = useState({
         name: '', email: '', phone: '', joiningDate: new Date().toISOString().split('T')[0], billingRenewalDate: new Date().toISOString().split('T')[0], gender: 'male', planId: '', address: '', customFields: {}
     });
@@ -44,7 +48,6 @@ const Clients = () => {
     const [workoutPlans, setWorkoutPlans] = useState([]);
     const [workoutForm, setWorkoutForm] = useState({ title: '', scheduledFor: new Date().toISOString().split('T')[0], notes: '' });
     const [rescheduleMap, setRescheduleMap] = useState({});
-    const [healthEnabled, setHealthEnabled] = useState(false);
     const isTitleCaseCustomType = (type) => ['text', 'textarea'].includes(type);
 
     const location = useLocation();
@@ -61,16 +64,6 @@ const Clients = () => {
             setClients(clientsRes.data);
             setPlans(plansRes.data);
 
-            // Fetch facility config for custom fields
-            try {
-                const facRes = await api.get('/facility/subscription');
-                setFacility(facRes.data);
-                setHealthEnabled(Boolean(facRes.data?.healthProfileEnabled));
-            } catch (facErr) {
-                console.log('Not a facility user or failed to fetch facility config');
-                setHealthEnabled(false);
-            }
-
             // Create a map of clientId -> true for quick lookup
             const attendance = {};
             attendanceRes.data.forEach(a => {
@@ -86,6 +79,19 @@ const Clients = () => {
         fetchClients();
     }, []);
 
+    const handleAddClick = () => {
+        const memberLimit = facility?.SubscriptionPlan?.maxMembers ?? facility?.subscriptionPlan?.maxMembers ?? null;
+        if (memberLimit !== null && clients.length >= Number(memberLimit)) {
+            addToast(`Exceeded limit: only ${memberLimit} members allowed in current SaaS plan.`, 'error');
+            return;
+        }
+
+        setIsEditMode(false);
+        const today = new Date().toISOString().split('T')[0];
+        setFormData({ name: '', email: '', phone: '', joiningDate: today, billingRenewalDate: today, gender: 'male', planId: '', address: '', customFields: {} });
+        setShowModal(true);
+    };
+
     useEffect(() => {
         const queryParams = new URLSearchParams(location.search);
         const action = queryParams.get('action');
@@ -99,20 +105,8 @@ const Clients = () => {
         if (status) {
             setStatusFilter(status);
         }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [location, navigate]);
-
-    const handleAddClick = () => {
-        const memberLimit = facility?.SubscriptionPlan?.maxMembers ?? facility?.subscriptionPlan?.maxMembers ?? null;
-        if (memberLimit !== null && clients.length >= Number(memberLimit)) {
-            addToast(`Exceeded limit: only ${memberLimit} members allowed in current SaaS plan.`, 'error');
-            return;
-        }
-
-        setIsEditMode(false);
-        const today = new Date().toISOString().split('T')[0];
-        setFormData({ name: '', email: '', phone: '', joiningDate: today, billingRenewalDate: today, gender: 'male', planId: '', address: '', customFields: {} });
-        setShowModal(true);
-    };
 
     const handleEditClick = (client) => {
         setIsEditMode(true);
@@ -137,7 +131,7 @@ const Clients = () => {
             addToast('Member deleted successfully', 'success');
             fetchClients();
             triggerDashboardRefresh();
-        } catch (err) {
+        } catch {
             addToast('Failed to delete member', 'error');
         }
     };
@@ -165,7 +159,7 @@ const Clients = () => {
             await api.post('/attendance', { clientId: client.id, status: 'present' });
             setAttendanceMap(prev => ({ ...prev, [client.id]: true }));
             addToast(`Attendance marked for ${client.name}`, 'success');
-        } catch (err) {
+        } catch {
             addToast('Failed to mark attendance', 'error');
         }
     };
@@ -175,7 +169,10 @@ const Clients = () => {
         setShowHistoryModal(true);
     };
 
-    const openHealthProfile = async (client) => {
+    // Legacy in-page health modal opener; health now opens via the dedicated
+    // /clients/:id/health route. Kept (prefixed unused) rather than ripping out
+    // the still-wired modal subsystem in this change.
+    const _openHealthProfile = async (client) => {
         try {
             const res = await api.get(`/clients/${client.id}/health-profile`);
             const hp = res.data?.healthProfile || {};
@@ -482,7 +479,25 @@ const Clients = () => {
                             justifyContent: 'space-between',
                             alignItems: 'center'
                         }}>
-                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Member Status</span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Status</span>
+                                {client.daysUntilRenewal !== null && client.daysUntilRenewal <= 7 && (
+                                    <span style={{
+                                        fontSize: '0.7rem',
+                                        background: client.daysUntilRenewal <= 0 ? 'rgba(239, 68, 68, 0.1)' : 'rgba(245, 158, 11, 0.1)',
+                                        color: client.daysUntilRenewal <= 0 ? '#ef4444' : '#f59e0b',
+                                        padding: '2px 6px',
+                                        borderRadius: '4px',
+                                        fontWeight: 'bold',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '4px'
+                                    }}>
+                                        <AlertCircle size={10} />
+                                        {client.daysUntilRenewal <= 0 ? 'Expired' : `${client.daysUntilRenewal}d left`}
+                                    </span>
+                                )}
+                            </div>
                             <span className={`status-badge ${client.status === 'active' ? 'status-active' :
                                 client.status === 'payment_due' ? 'status-payment-due' :
                                     'status-inactive'

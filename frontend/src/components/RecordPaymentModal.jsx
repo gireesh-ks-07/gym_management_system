@@ -14,7 +14,7 @@ const RecordPaymentModal = ({ isOpen, onClose, clients, preSelectedClientId = ''
         date: new Date().toISOString().split('T')[0]
     });
 
-    // Update clientId if preSelectedClientId changes
+    // Sync the selected client when the modal is (re)opened for a specific member.
     useEffect(() => {
         setFormData(prev => ({ ...prev, clientId: preSelectedClientId }));
     }, [preSelectedClientId, isOpen]);
@@ -41,7 +41,7 @@ const RecordPaymentModal = ({ isOpen, onClose, clients, preSelectedClientId = ''
             onClose();
             setFormData({ clientId: '', amount: '', method: 'cash', transactionId: '', date: new Date().toISOString().split('T')[0] });
             addToast('Payment recorded successfully', 'success');
-        } catch (err) {
+        } catch {
             addToast('Failed to record payment', 'error');
         }
     };

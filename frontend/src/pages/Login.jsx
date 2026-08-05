@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
-import { useNavigate } from 'react-router-dom';
+import { Navigate } from 'react-router-dom';
 import { ArrowRight, Lock, Mail } from 'lucide-react';
 import PasswordInput from '../components/PasswordInput';
 
@@ -10,16 +10,15 @@ const Login = () => {
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
     const { login, user } = useAuth();
-    const navigate = useNavigate();
     const [loading, setLoading] = useState(false);
 
     const { addToast } = useToast();
 
     useEffect(() => {
         if (user) {
-            navigate('/');
+            window.location.href = '/';
         }
-    }, [user, navigate]);
+    }, [user]);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -28,8 +27,8 @@ const Login = () => {
             addToast('Please enter a valid email address', 'error');
             return;
         }
-        if (password.length < 6) {
-            addToast('Password must be at least 6 characters long', 'error');
+        if (!password) {
+            addToast('Please enter your password', 'error');
             return;
         }
         setLoading(true);
@@ -40,6 +39,7 @@ const Login = () => {
             setError(result.message);
         } else {
             addToast('Logged in successfully', 'success');
+            window.location.href = '/';
         }
     };
 

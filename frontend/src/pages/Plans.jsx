@@ -26,7 +26,7 @@ const Plans = () => {
             setPlans(res.data);
         } catch (err) {
             console.error(err);
-            addToast('Failed to fetch plans', 'error');
+            addToast(err.response?.data?.message || 'Failed to fetch plans', 'error');
         }
     };
 
@@ -62,7 +62,7 @@ const Plans = () => {
             await api.delete(`/plans/${planId}`);
             addToast('Plan deleted successfully', 'success');
             fetchPlans();
-        } catch (err) {
+        } catch {
             addToast('Failed to delete plan', 'error');
         }
     };
@@ -114,7 +114,7 @@ const Plans = () => {
             setFormData({ name: '', price: '', duration: '', description: '', features: '' });
             setShowModal(false);
             fetchPlans();
-        } catch (err) {
+        } catch {
             addToast('Failed to save plan', 'error');
         }
     };

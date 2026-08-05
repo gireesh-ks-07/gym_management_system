@@ -36,7 +36,7 @@ const FacilityTypes = () => {
         try {
             const res = await api.get('/api/facility-types');
             setTypes(res.data);
-        } catch (err) {
+        } catch {
             addToast('Failed to fetch facility types', 'error');
         } finally {
             setLoading(false);

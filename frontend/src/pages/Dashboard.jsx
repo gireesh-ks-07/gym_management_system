@@ -27,19 +27,17 @@ const loadRazorpayCheckoutScript = () => {
 };
 
 const Dashboard = () => {
-    const { user, refreshFacilitySubscription } = useAuth();
+    // Subscription comes from AuthContext (single source of truth) so the
+    // dashboard doesn't re-fetch /facility/subscription on every mount.
+    const { user, facilitySubscription: subscription, refreshFacilitySubscription } = useAuth();
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
-    const [subscription, setSubscription] = useState(null);
     const [subscribing, setSubscribing] = useState(false);
     const navigate = useNavigate();
     const { addToast } = useToast();
 
     const fetchData = useCallback(async () => {
         try {
-            const subRes = await api.get('/facility/subscription').catch(() => null);
-            setSubscription(subRes?.data || null);
-
             const dashboardRes = await api.get('/dashboard');
             setData(dashboardRes.data);
         } catch (err) {
@@ -59,10 +57,14 @@ const Dashboard = () => {
             if (now - lastFocusRefresh > 60_000) {
                 lastFocusRefresh = now;
                 fetchData();
+                refreshFacilitySubscription();
             }
         };
 
-        const onRefresh = () => fetchData();
+        const onRefresh = () => {
+            fetchData();
+            refreshFacilitySubscription();
+        };
         window.addEventListener('dashboard:refresh', onRefresh);
         window.addEventListener('focus', onFocusRefresh);
 
@@ -70,7 +72,7 @@ const Dashboard = () => {
             window.removeEventListener('dashboard:refresh', onRefresh);
             window.removeEventListener('focus', onFocusRefresh);
         };
-    }, [fetchData]);
+    }, [fetchData, refreshFacilitySubscription]);
 
     if (user?.role === 'superadmin') {
         return <SuperAdminDashboard />;
@@ -99,8 +101,7 @@ const Dashboard = () => {
                 handler: async (response) => {
                     try {
                         await api.post('/facility/subscription/verify-autopay', response);
-                        const latest = await refreshFacilitySubscription();
-                        setSubscription(latest);
+                        await refreshFacilitySubscription();
                         addToast('AutoPay activated successfully.', 'success');
                         // Refresh dashboard data without full page reload
                         await fetchData();
@@ -183,7 +184,7 @@ const Dashboard = () => {
 
     if (!data) return <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>Failed to load dashboard data.</div>;
 
-    const { stats, recentClients, revenueChartData, revenueByMethod, planChartData } = data;
+    const { stats, recentClients, revenueChartData, planChartData } = data;
     const memberLimit = subscription?.SubscriptionPlan?.maxMembers ?? subscription?.subscriptionPlan?.maxMembers ?? null;
     const staffLimit = subscription?.SubscriptionPlan?.maxStaff ?? subscription?.subscriptionPlan?.maxStaff ?? null;
     const memberLimitExceeded = memberLimit !== null && Number(stats.totalClients) >= Number(memberLimit);
@@ -456,57 +457,88 @@ const Dashboard = () => {
                 </div>
             </div>
 
-            {/* Recent Members Table */}
-            <div className="card" style={{ padding: '0' }}>
-                <div style={{ padding: '1.5rem', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <h3 style={{ fontSize: '1.1rem' }}>Recent Registrations</h3>
-                    <button className="btn btn-secondary" style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}>View All</button>
-                </div>
-                <div className="table-wrapper" style={{ overflowX: 'auto' }}>
-                    <table className="modern-table">
-                        <thead>
-                            <tr>
-                                <th style={{ paddingLeft: '2rem' }}>Member Name</th>
-                                <th>Plan Details</th>
-                                <th>Joined</th>
-                                <th>Status</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {recentClients.map((client, index) => (
-                                <tr key={client.id || index}>
-                                    <td style={{ paddingLeft: '2rem' }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                                            <div style={{
-                                                width: '36px', height: '36px', borderRadius: '50%',
-                                                background: `linear-gradient(135deg, ${COLORS[index % 5]}, ${COLORS[(index + 1) % 5]})`,
-                                                color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '600', fontSize: '0.85rem'
-                                            }}>
-                                                {client.name.charAt(0)}
-                                            </div>
-                                            <div>
-                                                <div style={{ fontWeight: '500' }}>{client.name}</div>
-                                                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{client.phone}</div>
-                                            </div>
-                                        </div>
-                                    </td>
-                                    <td>
-                                        {client.Plan ? (
-                                            <span style={{ fontWeight: '500', color: 'var(--text-main)' }}>{client.Plan.name}</span>
-                                        ) : (
-                                            <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>No Plan</span>
-                                        )}
-                                    </td>
-                                    <td style={{ color: 'var(--text-secondary)' }}>
-                                        {formatDate(client.joiningDate)}
-                                    </td>
-                                    <td>
-                                        <span className="status-badge status-active">Active</span>
-                                    </td>
+            {/* Bottom Row */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(12, 1fr)', gap: '1.5rem' }}>
+                
+                {/* Recent Members Table */}
+                <div className="card" style={{ padding: '0', gridColumn: 'span 8' }}>
+                    <div style={{ padding: '1.5rem', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <h3 style={{ fontSize: '1.1rem' }}>Recent Registrations</h3>
+                        <button className="btn btn-secondary" style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }} onClick={() => navigate('/clients')}>View All</button>
+                    </div>
+                    <div className="table-wrapper" style={{ overflowX: 'auto' }}>
+                        <table className="modern-table">
+                            <thead>
+                                <tr>
+                                    <th style={{ paddingLeft: '2rem' }}>Member Name</th>
+                                    <th>Plan Details</th>
+                                    <th>Joined</th>
                                 </tr>
-                            ))}
-                        </tbody>
-                    </table>
+                            </thead>
+                            <tbody>
+                                {recentClients.map((client, index) => (
+                                    <tr key={client.id || index}>
+                                        <td style={{ paddingLeft: '2rem' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                                                <div style={{
+                                                    width: '36px', height: '36px', borderRadius: '50%',
+                                                    background: `linear-gradient(135deg, ${COLORS[index % 5]}, ${COLORS[(index + 1) % 5]})`,
+                                                    color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '600', fontSize: '0.85rem'
+                                                }}>
+                                                    {client.name.charAt(0)}
+                                                </div>
+                                                <div>
+                                                    <div style={{ fontWeight: '500' }}>{client.name}</div>
+                                                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{client.phone}</div>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            {client.Plan ? (
+                                                <span style={{ fontWeight: '500', color: 'var(--text-main)' }}>{client.Plan.name}</span>
+                                            ) : (
+                                                <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>No Plan</span>
+                                            )}
+                                        </td>
+                                        <td style={{ color: 'var(--text-secondary)' }}>
+                                            {formatDate(client.joiningDate)}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                {/* Renewals Due Section */}
+                <div className="card" style={{ padding: '0', gridColumn: 'span 4' }}>
+                    <div style={{ padding: '1.5rem', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <h3 style={{ fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '8px' }}><AlertCircle size={18} color="var(--accent-red)" /> Renewals Due</h3>
+                    </div>
+                    <div style={{ padding: '1rem' }}>
+                        {(!data.expiringMembers || data.expiringMembers.length === 0) ? (
+                            <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                                No renewals due this week.
+                            </div>
+                        ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                                {data.expiringMembers.map(member => (
+                                    <div key={member.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px', background: 'var(--bg-body)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                                        <div>
+                                            <div style={{ fontWeight: 600, fontSize: '0.95rem' }}>{member.name}</div>
+                                            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{member.phone}</div>
+                                        </div>
+                                        <div style={{ textAlign: 'right' }}>
+                                            <div style={{ color: member.daysLeft <= 0 ? 'var(--accent-red)' : 'var(--accent-orange)', fontWeight: 'bold', fontSize: '0.9rem' }}>
+                                                {member.daysLeft <= 0 ? 'Expired' : `${member.daysLeft} days left`}
+                                            </div>
+                                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{member.planName}</div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
                 </div>
             </div>
 

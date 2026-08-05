@@ -10,15 +10,15 @@ export const ToastProvider = ({ children }) => {
     const [toasts, setToasts] = useState([]);
     const [confirm, setConfirm] = useState(null); // { message, onConfirm, onCancel, title }
 
+    const removeToast = useCallback((id) => {
+        setToasts(prev => prev.filter(t => t.id !== id));
+    }, []);
+
     const addToast = useCallback((message, type = 'info', title = '') => {
         const id = Date.now();
         setToasts(prev => [...prev, { id, message, type, title }]);
         setTimeout(() => removeToast(id), 5000);
-    }, []);
-
-    const removeToast = useCallback((id) => {
-        setToasts(prev => prev.filter(t => t.id !== id));
-    }, []);
+    }, [removeToast]);
 
     const showConfirm = useCallback((message, onConfirm, title = 'Are you sure?', isDangerous = true) => {
         setConfirm({ message, onConfirm, title, isDangerous });

@@ -23,7 +23,25 @@ export default defineConfig([
       },
     },
     rules: {
-      'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
+      'no-unused-vars': ['error', {
+        varsIgnorePattern: '^[A-Z_]',
+        argsIgnorePattern: '^_',
+        caughtErrors: 'none',
+      }],
+      // Disabled intentionally: this is a very new, opinionated rule that fires on
+      // standard patterns used throughout this app — fetching data in an effect and
+      // calling setState after the request resolves, and syncing a prop/URL param
+      // into local state. Those effects are correct here, so the rule is noise.
+      'react-hooks/set-state-in-effect': 'off',
+    },
+  },
+  {
+    // Context files intentionally export a Provider component plus a hook
+    // (e.g. useAuth). That is the standard React Context pattern and only
+    // affects Fast Refresh granularity, not correctness.
+    files: ['src/context/**/*.{js,jsx}'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
     },
   },
 ])

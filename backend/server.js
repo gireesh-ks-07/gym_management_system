@@ -14,6 +14,11 @@ const Joi = require('joi');
 const { sequelize, User, Facility, Client, Plan, Payment, SubscriptionPlan, Attendance, Notification, FacilityType, FacilityAutoPayEvent } = require('./models');
 const { Op } = require('sequelize');
 
+// --- Gamification module (engine, HTTP routes, seed data) ---
+const gamification = require('./gamification/engine');
+const { registerGamificationRoutes } = require('./gamification/routes');
+const { seedGamificationDefaults } = require('./gamification/seed');
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -43,17 +48,25 @@ const authLimiter = rateLimit({
     message: { message: 'Too many login attempts. Please try again after 15 minutes.' }
 });
 
-// Environment-aware CORS — restrict origins in production
-const PRODUCTION_ORIGIN = process.env.ALLOWED_ORIGIN || 'https://facilityapis.mobilemonks.in';
-const allowedOrigins = process.env.NODE_ENV === 'production'
-    ? [PRODUCTION_ORIGIN]
-    : [PRODUCTION_ORIGIN, 'http://localhost:5173', 'http://localhost:3001', 'http://localhost:3000'];
+// Environment-aware CORS — restrict origins in production, permit all local dev ports
+const rawAllowedOrigins = (process.env.ALLOWED_ORIGIN || 'https://facilityapis.mobilemonks.in')
+    .split(',')
+    .map(o => o.trim())
+    .filter(Boolean);
 
 app.use(cors({
     origin: (origin, callback) => {
         // Allow requests with no origin (curl, Postman, mobile apps)
         if (!origin) return callback(null, true);
-        if (allowedOrigins.includes(origin)) return callback(null, true);
+
+        // In development, permit any localhost or 127.0.0.1 origin
+        if (process.env.NODE_ENV !== 'production') {
+            if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+                return callback(null, true);
+            }
+        }
+
+        if (rawAllowedOrigins.includes(origin)) return callback(null, true);
         callback(new Error(`CORS: Origin '${origin}' not allowed`));
     },
     credentials: true,
@@ -95,13 +108,18 @@ const authenticate = (req, res, next) => {
 
 const authorize = (roles = []) => {
     return (req, res, next) => {
-        console.log(`[AUTH] Authorizing path ${req.path} for role ${req.user.role}, required: ${roles}`);
         if (!roles.includes(req.user.role)) {
-            console.log(`[AUTH] Authorization FAILED for ${req.user.role} on ${req.path}`);
             return res.status(403).json({ message: 'Forbidden' });
         }
         next();
     };
+};
+
+// Log the real error server-side, return a generic message to the client so
+// internal details (stack traces, DB errors) are never leaked in responses.
+const sendServerError = (res, err, context = 'request') => {
+    console.error(`[ERROR] ${context}:`, err?.message || err);
+    return res.status(500).json({ message: 'Internal server error' });
 };
 
 const formatDisplayDate = (value) => {
@@ -144,15 +162,22 @@ const calculateClientPlanExpiry = (baseDateValue, monthsToAdd) => {
 };
 
 const toDateOnlyString = (value) => {
+    if (!value) return null;
+    if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value.trim())) {
+        return value.trim();
+    }
     const date = parseDateValue(value);
     if (!date) return null;
-    return date.toISOString().split('T')[0];
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
 };
 
 const normalizeGoalType = (value) => {
     if (!value) return null;
     const normalized = String(value).trim().toLowerCase();
-    const allowed = ['weight_loss', 'weight_gain', 'muscle_gain'];
+    const allowed = ['weight_loss', 'weight_gain', 'muscle_gain', 'strength', 'sports_performance'];
     return allowed.includes(normalized) ? normalized : null;
 };
 
@@ -177,6 +202,7 @@ const sanitizeHealthProfile = (payload = {}) => {
         height: toNullableNumber(source.height),
         bodyFatPercentage: toNullableNumber(source.bodyFatPercentage),
         notes: (source.notes || '').toString().trim(),
+        supplementNotes: (source.supplementNotes || '').toString().trim(),
         updatedAt: new Date().toISOString()
     };
 };
@@ -209,6 +235,13 @@ const getHealthState = (client) => {
     profile.workoutCalendar = Array.isArray(profile.workoutCalendar)
         ? [...profile.workoutCalendar]
         : [];
+    // Phase 2 — Health Pro sub-arrays (preserved as-is)
+    profile.bodyCompositionHistory = Array.isArray(profile.bodyCompositionHistory) ? [...profile.bodyCompositionHistory] : [];
+    profile.measurementLogs = Array.isArray(profile.measurementLogs) ? [...profile.measurementLogs] : [];
+    profile.personalRecords = Array.isArray(profile.personalRecords) ? [...profile.personalRecords] : [];
+    profile.fitnessTests = Array.isArray(profile.fitnessTests) ? [...profile.fitnessTests] : [];
+    profile.mobilityScreenings = Array.isArray(profile.mobilityScreenings) ? [...profile.mobilityScreenings] : [];
+    profile.goalReviews = Array.isArray(profile.goalReviews) ? [...profile.goalReviews] : [];
     return profile;
 };
 
@@ -297,6 +330,9 @@ const computeHealthDashboard = (profile = {}) => {
             progressPct = ((startWeight - currentWeight) / Math.max(startWeight - targetWeight, 1)) * 100;
         } else if (profile.goalType === 'weight_gain' || profile.goalType === 'muscle_gain') {
             progressPct = ((currentWeight - startWeight) / Math.max(targetWeight - startWeight, 1)) * 100;
+        } else if (profile.goalType === 'strength' || profile.goalType === 'sports_performance') {
+            // For strength/sports, progress is based on consistency of workouts
+            progressPct = consistencyPct || 0;
         }
     }
     progressPct = Math.max(0, Math.min(100, Math.round(progressPct)));
@@ -385,7 +421,17 @@ const computeHealthDashboard = (profile = {}) => {
     if (missedWeek > 2) {
         smartInsight = 'Missed sessions are high. Suggest 2-day recovery split and volume reset.';
     } else if (Math.abs(weekDelta) < 0.05) {
-        smartInsight = 'Weight progress is stagnant. Add 15-20 mins cardio post-workout.';
+        if (profile.goalType === 'strength') {
+            smartInsight = 'Keep pushing compound lifts. Log personal records to track strength gains.';
+        } else if (profile.goalType === 'sports_performance') {
+            smartInsight = 'Focus on sport-specific drills and agility work. Track fitness test benchmarks.';
+        } else {
+            smartInsight = 'Weight progress is stagnant. Add 15-20 mins cardio post-workout.';
+        }
+    } else if (profile.goalType === 'strength' && streakCount >= 3) {
+        smartInsight = 'Great training streak! Ensure adequate protein and rest for strength gains.';
+    } else if (profile.goalType === 'sports_performance' && consistencyPct >= 80) {
+        smartInsight = 'Excellent consistency for sports training! Consider adding mobility screening check-ins.';
     }
 
     return {
@@ -527,8 +573,22 @@ const setFacilityBlocked = async (facility, reason = 'AutoPay unavailable', razo
     await facility.save();
 };
 
-const syncFacilitySubscriptionFromRazorpay = async (facility) => {
+// Throttle Razorpay subscription syncs. checkSubscriptionStatus runs on ~26
+// endpoints and the dashboard fans out several requests per page load, so
+// without this every page view triggered a burst of identical Razorpay API
+// calls (the "subscription APIs in a loop" symptom). We sync at most once per
+// facility per RAZORPAY_SYNC_TTL_MS window.
+const RAZORPAY_SYNC_TTL_MS = 60 * 1000;
+const lastRazorpaySyncAt = new Map();
+
+const syncFacilitySubscriptionFromRazorpay = async (facility, { force = false } = {}) => {
     if (!facility?.razorpaySubscriptionId || !isRazorpayConfigured()) return facility;
+
+    if (!force) {
+        const last = lastRazorpaySyncAt.get(facility.id);
+        if (last && Date.now() - last < RAZORPAY_SYNC_TTL_MS) return facility;
+    }
+    lastRazorpaySyncAt.set(facility.id, Date.now());
 
     try {
         const remote = await callRazorpayApi(`/subscriptions/${facility.razorpaySubscriptionId}`);
@@ -677,21 +737,33 @@ const checkSubscriptionStatus = async (req, res, next) => {
         }
         next();
     } catch (err) {
-        return res.status(500).json({ error: err.message });
+        return sendServerError(res, err);
     }
 };
 
 // --- AUTH ROUTES ---
 
-app.post('/api/auth/register', async (req, res) => {
-    // Only for initial setup. In production, superadmin creates admins, admins create staff.
+// Superadmin-only. The initial superadmin is seeded automatically at startup,
+// so this endpoint must never be open — an unauthenticated caller could
+// otherwise create their own superadmin and take over the platform.
+app.post('/api/auth/register', authenticate, authorize(['superadmin']), async (req, res) => {
     try {
         const { name, email, password, role, facilityId } = req.body;
+        // Superadmin accounts can only be seeded server-side, never via the API.
+        const allowedRoles = ['admin', 'staff'];
+        if (!allowedRoles.includes(role)) {
+            return res.status(400).json({ message: `Role must be one of: ${allowedRoles.join(', ')}` });
+        }
         // No manual bcrypt.hash — User model beforeCreate hook handles hashing
         const user = await User.create({ name, email, password, role, facilityId });
-        res.json({ message: 'User registered successfully', user });
+        // Never return the password hash.
+        res.json({
+            message: 'User registered successfully',
+            user: { id: user.id, name: user.name, email: user.email, role: user.role, facilityId: user.facilityId }
+        });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        console.error('[REGISTER] Failed:', error.message);
+        res.status(500).json({ message: 'Failed to register user' });
     }
 });
 
@@ -708,15 +780,59 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     try {
         const { email, password } = req.body;
         const user = await User.findOne({ where: { email } });
-        if (!user) return res.status(404).json({ message: 'User not found' });
+        // Use one identical 401 for "no such email" and "wrong password" so an
+        // attacker can't enumerate which emails have accounts.
+        if (!user) return res.status(401).json({ message: 'Invalid email or password' });
 
         const isValid = await bcrypt.compare(password, user.password);
-        if (!isValid) return res.status(401).json({ message: 'Invalid credentials' });
+        if (!isValid) return res.status(401).json({ message: 'Invalid email or password' });
 
         const token = jwt.sign({ id: user.id, role: user.role, facilityId: user.facilityId }, SECRET_KEY, { expiresIn: '1d' });
         res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role, facilityId: user.facilityId } });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
+    }
+});
+
+app.post('/api/auth/client/login', authLimiter, async (req, res) => {
+    try {
+        const { email, phone, password } = req.body;
+        if (!password) return res.status(400).json({ message: 'Password is required' });
+        if (!email && !phone) return res.status(400).json({ message: 'Email or phone is required' });
+        
+        let client;
+        if (email) {
+            client = await Client.findOne({ where: { email } });
+        } else {
+            client = await Client.findOne({ where: { phone } });
+        }
+
+        if (!client || !client.password) {
+            return res.status(401).json({ message: 'Invalid credentials or password not set' });
+        }
+
+        const isValid = await bcrypt.compare(password, client.password);
+        if (!isValid) return res.status(401).json({ message: 'Invalid credentials' });
+
+        const token = jwt.sign({ id: client.id, role: 'client', facilityId: client.facilityId }, SECRET_KEY, { expiresIn: '7d' });
+        res.json({ token, user: { id: client.id, name: client.name, email: client.email, phone: client.phone, role: 'client', facilityId: client.facilityId } });
+    } catch (error) {
+        sendServerError(res, error);
+    }
+});
+
+app.post('/api/auth/client/set-password', async (req, res) => {
+    try {
+        const { phone, email, newPassword } = req.body;
+        const whereClause = phone ? { phone } : { email };
+        const client = await Client.findOne({ where: whereClause });
+        if (!client) return res.status(404).json({ message: 'Client not found' });
+        
+        client.password = newPassword;
+        await client.save();
+        res.json({ message: 'Password set successfully' });
+    } catch (error) {
+        sendServerError(res, error);
     }
 });
 
@@ -739,7 +855,7 @@ app.post('/api/subscription-plans', authenticate, authorize(['superadmin']), asy
 
         res.json(plan);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -748,7 +864,7 @@ app.get('/api/subscription-plans', authenticate, async (req, res) => {
         const plans = await SubscriptionPlan.findAll();
         res.json(plans);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -768,7 +884,7 @@ app.put('/api/subscription-plans/:id', authenticate, authorize(['superadmin']), 
         await plan.save();
         res.json(plan);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -780,7 +896,7 @@ app.delete('/api/subscription-plans/:id', authenticate, authorize(['superadmin']
         await plan.destroy();
         res.json({ message: 'Plan deleted successfully' });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -792,7 +908,7 @@ app.post('/api/facility-types', authenticate, authorize(['superadmin']), async (
         const type = await FacilityType.create({ name, icon, memberFormConfig });
         res.json(type);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -801,7 +917,7 @@ app.get('/api/facility-types', authenticate, async (req, res) => {
         const types = await FacilityType.findAll();
         res.json(types);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -818,7 +934,7 @@ app.put('/api/facility-types/:id', authenticate, authorize(['superadmin']), asyn
         await type.save();
         res.json(type);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -837,7 +953,7 @@ app.delete('/api/facility-types/:id', authenticate, authorize(['superadmin']), a
         res.json({ message: 'Facility type deleted successfully' });
     } catch (error) {
         console.error('Facility Type Delete Error:', error);
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -905,7 +1021,7 @@ app.post('/api/facilities', authenticate, authorize(['superadmin']), async (req,
 
         res.json(facility);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -979,7 +1095,7 @@ app.get('/api/facilities', authenticate, authorize(['superadmin']), async (req, 
         res.json(facilitiesWithUserDetails);
     } catch (error) {
         console.error('Error fetching facilities:', error);
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -1010,7 +1126,7 @@ app.post('/api/facilities/:id/assign-plan', authenticate, authorize(['superadmin
 
         res.json(facility);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -1038,7 +1154,7 @@ app.post('/api/facilities/:id/status', authenticate, authorize(['superadmin']), 
         await facility.save();
         res.json(facility);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -1058,7 +1174,7 @@ app.post('/api/facilities/:id/reset-password', authenticate, authorize(['superad
 
         res.json({ message: 'Password reset successfully' });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -1087,7 +1203,7 @@ app.post('/api/facilities/:id/subscription-update', authenticate, authorize(['su
         await facility.save();
         res.json(facility);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -1165,7 +1281,7 @@ app.get('/api/superadmin/dashboard', authenticate, authorize(['superadmin']), as
             autopayPayments
         });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -1186,7 +1302,7 @@ app.get('/api/facility/subscription', authenticate, async (req, res) => {
         }
         res.json(facility);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -1272,7 +1388,7 @@ app.post('/api/facility/subscription/create-autopay', authenticate, authorize(['
             }
         });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -1360,7 +1476,7 @@ app.post('/api/facility/subscription/verify-autopay', authenticate, authorize(['
 
         res.json(facility);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -1429,7 +1545,7 @@ app.post('/api/razorpay/webhook', async (req, res) => {
 
         res.json({ ok: true });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -1505,7 +1621,7 @@ app.post('/api/clients', authenticate, checkSubscriptionStatus, authorize(['admi
 
         res.json(client);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -1550,7 +1666,7 @@ app.post('/api/staff', authenticate, checkSubscriptionStatus, authorize(['admin'
 
         res.json(staff);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -1559,7 +1675,7 @@ app.get('/api/staff', authenticate, checkSubscriptionStatus, authorize(['admin']
         const staff = await User.findAll({ where: { facilityId: req.user.facilityId, role: 'staff' } });
         res.json(staff);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -1574,7 +1690,7 @@ app.post('/api/plans', authenticate, checkSubscriptionStatus, authorize(['admin'
         });
         res.json(plan);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -1594,7 +1710,7 @@ app.put('/api/plans/:id', authenticate, checkSubscriptionStatus, authorize(['adm
         await plan.save();
         res.json(plan);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -1603,7 +1719,7 @@ app.get('/api/plans', authenticate, checkSubscriptionStatus, authorize(['admin',
         const plans = await Plan.findAll({ where: { facilityId: req.user.facilityId } });
         res.json(plans);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -1676,6 +1792,34 @@ app.get('/api/dashboard', authenticate, authorize(['admin', 'staff', 'superadmin
 
         const planChartData = Object.entries(planDistribution).map(([name, value]) => ({ name, value }));
 
+        // 7. Expiring members (within next 7 days)
+        now.setHours(0, 0, 0, 0);
+        const sevenDaysLater = new Date(now);
+        sevenDaysLater.setDate(sevenDaysLater.getDate() + 7);
+        let expiringMembers = await Client.findAll({
+            where: {
+                facilityId,
+                status: { [Op.in]: ['active', 'payment_due'] },
+                planExpiresAt: { [Op.between]: [now, sevenDaysLater] }
+            },
+            include: [Plan],
+            order: [['planExpiresAt', 'ASC']],
+            limit: 20
+        });
+        expiringMembers = expiringMembers.map(c => {
+            const expiry = new Date(c.planExpiresAt);
+            expiry.setHours(0, 0, 0, 0);
+            now.setHours(0, 0, 0, 0);
+            return {
+                id: c.id,
+                name: c.name,
+                phone: c.phone,
+                planName: c.Plan?.name || null,
+                planExpiresAt: toDateOnlyString(c.planExpiresAt),
+                daysLeft: Math.ceil((expiry - now) / (1000 * 60 * 60 * 24))
+            };
+        });
+
         res.json({
             stats: {
                 totalClients,
@@ -1687,17 +1831,34 @@ app.get('/api/dashboard', authenticate, authorize(['admin', 'staff', 'superadmin
             recentClients,
             revenueChartData,
             revenueByMethod,
-            planChartData
+            planChartData,
+            expiringMembers
         });
 
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
 app.post('/api/payments', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
     try {
         const { clientId, amount, method, date, transactionId } = req.body;
+
+        // Ensure the client belongs to the caller's facility before recording
+        // a payment against it (prevents cross-tenant writes / IDOR).
+        const client = await Client.findOne({
+            where: { id: clientId, facilityId: req.user.facilityId },
+            include: [Plan]
+        });
+        if (!client) {
+            return res.status(404).json({ message: 'Member not found' });
+        }
+
+        const today = new Date();
+        const yearMonth = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}`;
+        const rand = Math.floor(Math.random() * 90000) + 10000;
+        const invoiceNumber = `INV-${yearMonth}-${rand}`;
+
         const payment = await Payment.create({
             clientId,
             amount,
@@ -1705,12 +1866,13 @@ app.post('/api/payments', authenticate, checkSubscriptionStatus, authorize(['adm
             date,
             transactionId,
             processedBy: req.user.id,
-            facilityId: req.user.facilityId
+            facilityId: req.user.facilityId,
+            invoiceNumber,
+            planId: client.planId || null
         });
 
         // Activate client and set expiry
-        const client = await Client.findByPk(clientId, { include: [Plan] });
-        if (client) {
+        {
             const normalizedBillingDate = toDateOnlyString(date || new Date());
             if (normalizedBillingDate) {
                 client.billingRenewalDate = normalizedBillingDate;
@@ -1729,6 +1891,12 @@ app.post('/api/payments', authenticate, checkSubscriptionStatus, authorize(['adm
             await client.save();
         }
 
+        // Gamification: award on-time payment XP (idempotent per payment).
+        gamification.awardActivity(clientId, req.user.facilityId,
+            [{ code: 'payment_on_time' }],
+            { sourceType: 'payment', sourceId: payment.id }
+        );
+
         // Fetch the created payment with associations
         const fullPayment = await Payment.findByPk(payment.id, {
             include: [
@@ -1739,7 +1907,118 @@ app.post('/api/payments', authenticate, checkSubscriptionStatus, authorize(['adm
 
         res.json(fullPayment);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
+    }
+});
+
+// ============================================================================
+// CLIENT APP APIs
+// ============================================================================
+
+app.get('/api/client/me', authenticate, authorize(['client']), async (req, res) => {
+    try {
+        const client = await Client.findByPk(req.user.id, {
+            include: [
+                {
+                    model: Plan,
+                    attributes: ['name', 'price', 'duration']
+                },
+                {
+                    model: Facility,
+                    attributes: ['name']
+                }
+            ],
+            attributes: {
+                exclude: ['password', 'resetPasswordToken', 'resetPasswordExpires', 'aadhaar_number']
+            }
+        });
+
+        if (!client) return res.status(404).json({ message: 'Client not found' });
+
+        // Get recent attendance (last 5)
+        const recentAttendance = await Attendance.findAll({
+            where: { clientId: req.user.id },
+            order: [['date', 'DESC']],
+            limit: 5
+        });
+
+        // Get recent payments (last 5)
+        const recentPayments = await Payment.findAll({
+            where: { clientId: req.user.id },
+            order: [['date', 'DESC']],
+            limit: 5
+        });
+
+        res.json({
+            client,
+            recentAttendance,
+            recentPayments
+        });
+    } catch (error) {
+        sendServerError(res, error, 'GET /api/client/me');
+    }
+});
+
+// --- MEMBER (client-app) SCOPED READ ENDPOINTS ---
+
+// Full attendance history for the logged-in member + summary/streak.
+app.get('/api/client/attendance', authenticate, authorize(['client']), async (req, res) => {
+    try {
+        const records = await Attendance.findAll({
+            where: { clientId: req.user.id },
+            order: [['date', 'DESC']]
+        });
+
+        const present = records.filter(r => r.status === 'present').length;
+        const absent = records.filter(r => r.status === 'absent').length;
+        const excused = records.filter(r => r.status === 'excused').length;
+
+        // Current streak: consecutive most-recent 'present' days.
+        let streak = 0;
+        for (const r of records) {
+            if (r.status === 'present') streak += 1;
+            else break;
+        }
+
+        res.json({
+            attendance: records,
+            summary: { total: records.length, present, absent, excused, streak }
+        });
+    } catch (error) {
+        sendServerError(res, error, 'GET /api/client/attendance');
+    }
+});
+
+// Full payment history for the logged-in member + totals/outstanding flag.
+app.get('/api/client/payments', authenticate, authorize(['client']), async (req, res) => {
+    try {
+        const client = await Client.findByPk(req.user.id, {
+            include: [{ model: Plan, attributes: ['name', 'price', 'duration'] }],
+            attributes: ['id', 'status', 'planExpiresAt']
+        });
+        if (!client) return res.status(404).json({ message: 'Client not found' });
+
+        const payments = await Payment.findAll({
+            where: { clientId: req.user.id },
+            order: [['date', 'DESC']]
+        });
+
+        const totalPaid = payments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+        const isDue = client.status === 'payment_due';
+
+        res.json({
+            payments,
+            plan: client.Plan || null,
+            planExpiresAt: client.planExpiresAt,
+            status: client.status,
+            totalPaid,
+            isDue,
+            // We only know an amount is owed, not the exact figure; expose the
+            // plan price as the best-effort outstanding hint when due.
+            outstanding: isDue ? Number(client.Plan?.price || 0) : 0
+        });
+    } catch (error) {
+        sendServerError(res, error, 'GET /api/client/payments');
     }
 });
 
@@ -1757,15 +2036,30 @@ app.get('/api/clients', authenticate, checkSubscriptionStatus, authorize(['admin
 
         const queryOptions = { where, include: [Plan], order: [['createdAt', 'DESC']], limit, offset };
 
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        const addRenewalInfo = (clients) => clients.map(c => {
+            const obj = c.toJSON ? c.toJSON() : { ...c };
+            if (obj.planExpiresAt) {
+                const expiry = new Date(obj.planExpiresAt);
+                expiry.setHours(0, 0, 0, 0);
+                obj.daysUntilRenewal = Math.ceil((expiry - today) / (1000 * 60 * 60 * 24));
+            } else {
+                obj.daysUntilRenewal = null;
+            }
+            return obj;
+        });
+
         if (page) {
             const { rows, count } = await Client.findAndCountAll(queryOptions);
-            res.json({ data: rows, total: count, page, pages: Math.ceil(count / limit), limit });
+            res.json({ data: addRenewalInfo(rows), total: count, page, pages: Math.ceil(count / limit), limit });
         } else {
             const clients = await Client.findAll(queryOptions);
-            res.json(clients);
+            res.json(addRenewalInfo(clients));
         }
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -1775,13 +2069,14 @@ app.get('/api/payments', authenticate, checkSubscriptionStatus, authorize(['admi
             where: { facilityId: req.user.facilityId },
             include: [
                 { model: Client, attributes: ['name'] },
-                { model: User, as: 'processor', attributes: ['name'] }
+                { model: User, as: 'processor', attributes: ['name'] },
+                { model: Plan, attributes: ['name', 'price', 'duration'] }
             ],
             order: [['date', 'DESC']]
         });
         res.json(payments);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -1872,6 +2167,67 @@ app.get('/api/reports', authenticate, checkSubscriptionStatus, authorize(['admin
             chargedEvents: autopayPayments.filter((e) => e.eventType === 'subscription.charged').length
         };
 
+        // Attendance Stats — total check-ins this month, top attending members
+        let attendanceStats = null;
+        if (req.user.role !== 'superadmin' && facilityId) {
+            const monthStart = new Date();
+            monthStart.setDate(1);
+            monthStart.setHours(0, 0, 0, 0);
+            const monthStartStr = toDateOnlyString(monthStart);
+
+            const [monthlyCheckIns, topAttendees] = await Promise.all([
+                Attendance.count({ where: { facilityId, date: { [Op.gte]: monthStartStr } } }),
+                Attendance.findAll({
+                    attributes: ['clientId', [sequelize.fn('COUNT', sequelize.col('Attendance.id')), 'checkIns']],
+                    where: { facilityId, date: { [Op.gte]: monthStartStr } },
+                    include: [{ model: Client, attributes: ['name'] }],
+                    group: ['clientId', 'Client.id'],
+                    order: [[sequelize.fn('COUNT', sequelize.col('Attendance.id')), 'DESC']],
+                    limit: 5,
+                    raw: false
+                })
+            ]);
+            attendanceStats = {
+                monthlyCheckIns,
+                topAttendees: topAttendees.map(a => ({
+                    name: a.Client?.name || 'Unknown',
+                    checkIns: parseInt(a.dataValues.checkIns, 10) || 0
+                }))
+            };
+        }
+
+        // Expiring members (within next 7 days)
+        let expiringMembers = [];
+        if (req.user.role !== 'superadmin' && facilityId) {
+            const now = new Date();
+            now.setHours(0, 0, 0, 0);
+            const sevenDaysLater = new Date(now);
+            sevenDaysLater.setDate(sevenDaysLater.getDate() + 7);
+            expiringMembers = await Client.findAll({
+                where: {
+                    facilityId,
+                    status: { [Op.in]: ['active', 'payment_due'] },
+                    planExpiresAt: { [Op.between]: [now, sevenDaysLater] }
+                },
+                include: [Plan],
+                order: [['planExpiresAt', 'ASC']],
+                limit: 20
+            });
+            expiringMembers = expiringMembers.map(c => {
+                const expiry = new Date(c.planExpiresAt);
+                expiry.setHours(0, 0, 0, 0);
+                now.setHours(0, 0, 0, 0);
+                return {
+                    id: c.id,
+                    name: c.name,
+                    phone: c.phone,
+                    planName: c.Plan?.name || null,
+                    planExpiresAt: toDateOnlyString(c.planExpiresAt),
+                    daysLeft: Math.ceil((expiry - now) / (1000 * 60 * 60 * 24))
+                };
+            });
+        }
+
         res.json({
             revenue,
             planStats,
@@ -1879,10 +2235,12 @@ app.get('/api/reports', authenticate, checkSubscriptionStatus, authorize(['admin
             genderStats,
             blockedFacilities,
             autopayPayments,
-            autopayStats
+            autopayStats,
+            attendanceStats,
+            expiringMembers
         });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -1890,7 +2248,7 @@ app.get('/api/reports', authenticate, checkSubscriptionStatus, authorize(['admin
 
 app.put('/api/facilities/:id', authenticate, authorize(['superadmin']), async (req, res) => {
     try {
-        const { name, address, facilityTypeId, healthProfileEnabled } = req.body;
+        const { name, address, facilityTypeId, healthProfileEnabled, modules } = req.body;
         const facility = await Facility.findByPk(req.params.id);
         if (!facility) return res.status(404).json({ message: 'Facility not found' });
 
@@ -1902,10 +2260,14 @@ app.put('/api/facilities/:id', authenticate, authorize(['superadmin']), async (r
         if (Object.prototype.hasOwnProperty.call(req.body, 'healthProfileEnabled')) {
             facility.healthProfileEnabled = Boolean(healthProfileEnabled);
         }
+        if (modules && typeof modules === 'object') {
+            const current = facility.modules || {};
+            facility.modules = { ...current, ...modules };
+        }
         await facility.save();
         res.json(facility);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -1921,7 +2283,7 @@ app.get('/api/attendance/today', authenticate, checkSubscriptionStatus, authoriz
         });
         res.json(attendance);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -1938,7 +2300,7 @@ app.get('/api/attendance/client/:clientId', authenticate, checkSubscriptionStatu
         });
         res.json(attendance);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -1964,9 +2326,16 @@ app.post('/api/attendance', authenticate, checkSubscriptionStatus, authorize(['a
             checkInTime: new Date().toLocaleTimeString('en-US', { hour12: false })
         });
 
+        // Gamification: award attendance + daily check-in XP, update streak
+        // (idempotent per day, never blocks the response).
+        gamification.awardActivity(clientId, req.user.facilityId,
+            [{ code: 'gym_attendance' }, { code: 'daily_checkin' }],
+            { sourceType: 'attendance', sourceId: attendance.id, date: today }
+        );
+
         res.json(attendance);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -1977,7 +2346,7 @@ app.delete('/api/facilities/:id', authenticate, authorize(['superadmin']), async
         await facility.destroy();
         res.json({ message: 'Facility deleted successfully' });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -2045,7 +2414,7 @@ app.put('/api/clients/:id', authenticate, checkSubscriptionStatus, authorize(['a
         await client.save();
         res.json(client);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -2056,7 +2425,7 @@ app.delete('/api/clients/:id', authenticate, checkSubscriptionStatus, authorize(
         await client.destroy();
         res.json({ message: 'Client deleted successfully' });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -2133,7 +2502,7 @@ app.get('/api/clients/:id/health-profile', authenticate, checkSubscriptionStatus
             workoutPlans: Array.isArray(client.workoutPlans) ? client.workoutPlans : []
         });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -2155,8 +2524,209 @@ app.put('/api/clients/:id/health-profile', authenticate, checkSubscriptionStatus
         await client.save();
         res.json({ healthProfile: client.healthProfile });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
+});
+
+// Helper to check Health Pro module
+const getFacilityHealthPro = async (facilityId) => {
+    const facility = await Facility.findByPk(facilityId, { attributes: ['id', 'modules'] });
+    return Boolean(facility?.modules?.healthPro);
+};
+
+// --- PHASE 2: HEALTH PRO ENDPOINTS ---
+
+// Body Composition History — POST a new entry
+app.post('/api/clients/:id/health-profile/body-composition', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+    try {
+        const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
+        if (!client) return res.status(404).json({ message: 'Client not found' });
+        const profile = getHealthState(client);
+        const entry = {
+            id: `bc_${Date.now()}`,
+            date: toDateOnlyString(req.body.date || new Date()),
+            bodyFat: toNullableNumber(req.body.bodyFat),
+            weight: toNullableNumber(req.body.weight),
+            notes: (req.body.notes || '').toString().trim(),
+            createdAt: new Date().toISOString()
+        };
+        profile.bodyCompositionHistory = [entry, ...(profile.bodyCompositionHistory || [])];
+        if (entry.bodyFat != null) profile.bodyFatPercentage = entry.bodyFat;
+        if (entry.weight != null) {
+            profile.currentWeight = entry.weight;
+            profile.weeklyWeights = [{ date: entry.date, weight: entry.weight }, ...(profile.weeklyWeights || [])];
+        }
+        client.healthProfile = profile;
+        await client.save();
+        gamification.awardActivity(client.id, req.user.facilityId, [{ code: 'weight_updated' }],
+            { sourceType: 'body_composition', sourceId: entry.id, date: entry.date });
+        res.json({ entry, bodyCompositionHistory: profile.bodyCompositionHistory });
+    } catch (error) { sendServerError(res, error); }
+});
+
+// Body Measurements Log — POST a new entry
+app.post('/api/clients/:id/health-profile/measurements', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+    try {
+        const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
+        if (!client) return res.status(404).json({ message: 'Client not found' });
+        const profile = getHealthState(client);
+        const entry = {
+            id: `ml_${Date.now()}`,
+            date: toDateOnlyString(req.body.date || new Date()),
+            chest: toNullableNumber(req.body.chest),
+            waist: toNullableNumber(req.body.waist),
+            hips: toNullableNumber(req.body.hips),
+            arms: toNullableNumber(req.body.arms),
+            thighs: toNullableNumber(req.body.thighs),
+            shoulders: toNullableNumber(req.body.shoulders),
+            notes: (req.body.notes || '').toString().trim(),
+            createdAt: new Date().toISOString()
+        };
+        profile.measurementLogs = [entry, ...(profile.measurementLogs || [])];
+        client.healthProfile = profile;
+        await client.save();
+        gamification.awardActivity(client.id, req.user.facilityId, [{ code: 'measurements_updated' }],
+            { sourceType: 'measurements', sourceId: entry.id, date: entry.date });
+        res.json({ entry, measurementLogs: profile.measurementLogs });
+    } catch (error) { sendServerError(res, error); }
+});
+
+// Personal Records (PRs) — POST a new record
+app.post('/api/clients/:id/health-profile/personal-records', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+    try {
+        const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
+        if (!client) return res.status(404).json({ message: 'Client not found' });
+        const profile = getHealthState(client);
+        const entry = {
+            id: `pr_${Date.now()}`,
+            date: toDateOnlyString(req.body.date || new Date()),
+            exercise: (req.body.exercise || '').toString().trim(),
+            weight: toNullableNumber(req.body.weight),
+            reps: toNullableNumber(req.body.reps),
+            sets: toNullableNumber(req.body.sets),
+            unit: (req.body.unit || 'kg').toString().trim(),
+            notes: (req.body.notes || '').toString().trim(),
+            createdAt: new Date().toISOString()
+        };
+        if (!entry.exercise) return res.status(400).json({ message: 'Exercise name is required.' });
+        profile.personalRecords = [entry, ...(profile.personalRecords || [])];
+        client.healthProfile = profile;
+        await client.save();
+        gamification.awardActivity(client.id, req.user.facilityId, [{ code: 'personal_record' }],
+            { sourceType: 'personal_record', sourceId: entry.id, date: entry.date });
+        res.json({ entry, personalRecords: profile.personalRecords });
+    } catch (error) { sendServerError(res, error); }
+});
+
+// Fitness Tests — POST a new test result
+app.post('/api/clients/:id/health-profile/fitness-tests', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+    try {
+        const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
+        if (!client) return res.status(404).json({ message: 'Client not found' });
+        const profile = getHealthState(client);
+        const allowedTypes = ['1_mile_run', 'push_ups', 'plank_hold', 'vo2_max', 'sit_ups', 'pull_ups', 'custom'];
+        const entry = {
+            id: `ft_${Date.now()}`,
+            date: toDateOnlyString(req.body.date || new Date()),
+            type: allowedTypes.includes(req.body.type) ? req.body.type : 'custom',
+            label: (req.body.label || req.body.type || 'Fitness Test').toString().trim(),
+            score: toNullableNumber(req.body.score),
+            unit: (req.body.unit || '').toString().trim(),
+            notes: (req.body.notes || '').toString().trim(),
+            createdAt: new Date().toISOString()
+        };
+        profile.fitnessTests = [entry, ...(profile.fitnessTests || [])];
+        client.healthProfile = profile;
+        await client.save();
+        res.json({ entry, fitnessTests: profile.fitnessTests });
+    } catch (error) { sendServerError(res, error); }
+});
+
+// Mobility Screening — POST a new screening result
+app.post('/api/clients/:id/health-profile/mobility-screenings', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+    try {
+        const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
+        if (!client) return res.status(404).json({ message: 'Client not found' });
+        const profile = getHealthState(client);
+        const entry = {
+            id: `ms_${Date.now()}`,
+            date: toDateOnlyString(req.body.date || new Date()),
+            overallScore: toNullableNumber(req.body.overallScore),
+            areas: Array.isArray(req.body.areas) ? req.body.areas : [],
+            notes: (req.body.notes || '').toString().trim(),
+            createdAt: new Date().toISOString()
+        };
+        profile.mobilityScreenings = [entry, ...(profile.mobilityScreenings || [])];
+        client.healthProfile = profile;
+        await client.save();
+        res.json({ entry, mobilityScreenings: profile.mobilityScreenings });
+    } catch (error) { sendServerError(res, error); }
+});
+
+// Goal Reviews — POST a new review entry
+app.post('/api/clients/:id/health-profile/goal-reviews', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+    try {
+        const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
+        if (!client) return res.status(404).json({ message: 'Client not found' });
+        const profile = getHealthState(client);
+        const entry = {
+            id: `gr_${Date.now()}`,
+            date: toDateOnlyString(req.body.date || new Date()),
+            reviewedBy: (req.body.reviewedBy || '').toString().trim(),
+            currentGoalType: profile.goalType || null,
+            progressRating: toNullableNumber(req.body.progressRating), // 1-5
+            notes: (req.body.notes || '').toString().trim(),
+            goalUpdated: Boolean(req.body.goalUpdated),
+            newGoalType: req.body.goalUpdated ? normalizeGoalType(req.body.newGoalType) : null,
+            createdAt: new Date().toISOString()
+        };
+        if (entry.goalUpdated && entry.newGoalType) {
+            profile.goalType = entry.newGoalType;
+        }
+        profile.goalReviews = [entry, ...(profile.goalReviews || [])];
+        client.healthProfile = profile;
+        await client.save();
+        res.json({ entry, goalReviews: profile.goalReviews, updatedGoalType: profile.goalType });
+    } catch (error) { sendServerError(res, error); }
+});
+
+// Invoice endpoint — GET payment invoice data
+app.get('/api/payments/:id/invoice', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+    try {
+        const payment = await Payment.findOne({
+            where: { id: req.params.id, facilityId: req.user.facilityId },
+            include: [
+                { model: Client, attributes: ['name', 'phone', 'email', 'address'] },
+                { model: Plan, attributes: ['name', 'duration'] },
+                { model: User, as: 'processor', attributes: ['name'] }
+            ]
+        });
+        if (!payment) return res.status(404).json({ message: 'Payment not found' });
+
+        const facility = await Facility.findByPk(req.user.facilityId, { attributes: ['id', 'name', 'address'] });
+
+        res.json({
+            invoiceNumber: payment.invoiceNumber || `INV-${payment.id}`,
+            invoiceDate: payment.date,
+            facility: { name: facility?.name, address: facility?.address },
+            client: {
+                name: payment.Client?.name,
+                phone: payment.Client?.phone,
+                email: payment.Client?.email,
+                address: payment.Client?.address
+            },
+            payment: {
+                id: payment.id,
+                amount: payment.amount,
+                method: payment.method,
+                transactionId: payment.transactionId,
+                date: payment.date,
+                planName: payment.Plan?.name || null,
+                planDuration: payment.Plan?.duration || null,
+                processedBy: payment.processor?.name || null
+            }
+        });
+    } catch (error) { sendServerError(res, error); }
 });
 
 app.post('/api/clients/:id/workout-plans', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
@@ -2176,7 +2746,7 @@ app.post('/api/clients/:id/workout-plans', authenticate, checkSubscriptionStatus
         await client.save();
         res.json({ workoutPlan: entry, workoutPlans: current });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -2221,7 +2791,7 @@ app.put('/api/clients/:id/workout-plans/:planId/reschedule', authenticate, check
         await client.save();
         res.json({ workoutPlan: current, workoutPlans: plans });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -2260,7 +2830,7 @@ app.post('/api/clients/:id/workout-plans/:planId/progress', authenticate, checkS
         await client.save();
         res.json({ workoutPlan: current, workoutPlans: plans });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -2324,7 +2894,7 @@ app.post('/api/clients/:id/workout-schedules', authenticate, checkSubscriptionSt
 
         res.json({ currentSchedule: schedule, pastSchedules: profile.pastSchedules });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -2356,13 +2926,13 @@ app.post('/api/clients/:id/workout-schedules/:scheduleId/day-log', authenticate,
             ? Number(dayNumber)
             : (assigned?.dayNumber ?? null);
 
-        const existingIndex = profile.workoutCalendar.findIndex((log) => (
+        const existingEntries = profile.workoutCalendar.filter((log) => (
             log?.scheduleId === schedule.id && log?.date === logDate
         ));
-        const existingEntry = existingIndex >= 0 ? profile.workoutCalendar[existingIndex] : null;
-        if (existingIndex >= 0) {
-            profile.workoutCalendar.splice(existingIndex, 1);
-        }
+        const existingEntry = existingEntries.find((e) => e.status === 'done') || existingEntries[0] || null;
+        profile.workoutCalendar = profile.workoutCalendar.filter((log) => !(
+            log?.scheduleId === schedule.id && log?.date === logDate
+        ));
 
         const entry = {
             id: `wlog_${Date.now()}_${Math.floor(Math.random() * 100000)}`,
@@ -2390,13 +2960,23 @@ app.post('/api/clients/:id/workout-schedules/:scheduleId/day-log', authenticate,
         client.healthProfile = profile;
         await client.save();
 
+        // Gamification: award workout / cardio XP for logged sessions.
+        if (logStatus === 'done' || logStatus === 'cardio') {
+            const rules = [];
+            if (logStatus === 'done') rules.push({ code: 'workout_completed' });
+            if (logStatus === 'cardio') rules.push({ code: 'cardio_completed' });
+            if (Number(cardioMinutes) > 60) rules.push({ code: 'workout_long' });
+            gamification.awardActivity(client.id, req.user.facilityId, rules,
+                { sourceType: 'daylog', sourceId: `${schedule.id}:${logDate}`, date: logDate });
+        }
+
         res.json({
             workoutCalendar: profile.workoutCalendar,
             currentSchedule: profile.currentSchedule,
             dashboard: computeHealthDashboard(profile)
         });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -2434,7 +3014,7 @@ app.post('/api/clients/:id/weekly-weight', authenticate, checkSubscriptionStatus
             dashboard: computeHealthDashboard(profile)
         });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -2450,7 +3030,7 @@ app.put('/api/staff/:id', authenticate, checkSubscriptionStatus, authorize(['adm
         await staff.save();
         res.json(staff);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -2461,7 +3041,7 @@ app.delete('/api/staff/:id', authenticate, checkSubscriptionStatus, authorize(['
         await staff.destroy();
         res.json({ message: 'Staff deleted successfully' });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -2472,7 +3052,7 @@ app.delete('/api/plans/:id', authenticate, checkSubscriptionStatus, authorize(['
         await plan.destroy();
         res.json({ message: 'Plan deleted successfully' });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -2493,7 +3073,7 @@ app.get('/api/notifications', authenticate, async (req, res) => {
         });
         res.json(notifications);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -2506,7 +3086,7 @@ app.post('/api/notifications/mark-read/:id', authenticate, async (req, res) => {
         }
         res.json({ success: true });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
 
@@ -2523,9 +3103,12 @@ app.post('/api/notifications/mark-all-read', authenticate, async (req, res) => {
         await Notification.update({ isRead: true }, { where });
         res.json({ success: true });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error);
     }
 });
+
+// --- GAMIFICATION ROUTES (client app + admin portal) ---
+registerGamificationRoutes(app, { authenticate, authorize, checkSubscriptionStatus, sendServerError });
 
 // Initialize DB and Start Server
 // Global Error Handler
@@ -2584,6 +3167,37 @@ cron.schedule('0 0 * * *', async () => {
     }
 });
 
+// --- GAMIFICATION CRON JOBS ---
+// Weekly league reset + promotion/relegation (Monday 00:00).
+cron.schedule('0 0 * * 1', async () => {
+    try {
+        const result = await gamification.computeLeaguePromotions();
+        console.log(`[CRON] League reset done. Promotions: ${result.promotions}, Relegations: ${result.relegations}.`);
+    } catch (err) {
+        console.error('[CRON] League promotion error:', err.message);
+    }
+});
+
+// Daily streak decay — break streaks for members who were inactive yesterday (00:05).
+cron.schedule('5 0 * * *', async () => {
+    try {
+        const broken = await gamification.decayStreaks();
+        console.log(`[CRON] Streak decay done. ${broken} streak(s) reset.`);
+    } catch (err) {
+        console.error('[CRON] Streak decay error:', err.message);
+    }
+});
+
+// Daily challenge generation + expiry of stale challenges (00:01).
+cron.schedule('1 0 * * *', async () => {
+    try {
+        await gamification.generateScheduledChallenges();
+        console.log('[CRON] Scheduled challenges generated.');
+    } catch (err) {
+        console.error('[CRON] Challenge generation error:', err.message);
+    }
+});
+
 // Run initial client sync on startup
 (async () => {
     try {
@@ -2601,7 +3215,8 @@ sequelize.sync({ alter: !isProduction }).then(async () => {
     if (!superadmin) {
         const defaultPassword = process.env.SUPERADMIN_DEFAULT_PASSWORD || 'admin123';
         if (isProduction && defaultPassword === 'admin123') {
-            console.warn('[WARN] Using default superadmin password in production. Set SUPERADMIN_DEFAULT_PASSWORD in .env!');
+            console.error('[FATAL] Refusing to seed superadmin with the well-known default password in production. Set SUPERADMIN_DEFAULT_PASSWORD in .env.');
+            process.exit(1);
         }
         // No manual bcrypt.hash — User model beforeCreate hook handles hashing
         await User.create({
@@ -2622,6 +3237,16 @@ sequelize.sync({ alter: !isProduction }).then(async () => {
             { message: 'Your monthly revenue report for February is now available.', type: 'info', role: 'superadmin', path: '/reports' }
         ]);
         console.log('Initial notifications seeded.');
+    }
+
+    // Seed global gamification defaults (XP rules, leagues, achievements)
+    // and generate today's / this week's challenges.
+    await seedGamificationDefaults();
+    try {
+        await gamification.generateScheduledChallenges();
+        console.log('Scheduled challenges generated.');
+    } catch (err) {
+        console.error('[gamification] challenge generation failed:', err.message);
     }
 
     app.listen(PORT, '0.0.0.0', () => {

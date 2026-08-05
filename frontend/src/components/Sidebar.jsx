@@ -1,7 +1,7 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { LayoutDashboard, Users, LogOut, Settings, Tag, CreditCard, BarChart2, Building2, Layers, X } from 'lucide-react';
+import { LayoutDashboard, Users, LogOut, Settings, Tag, CreditCard, BarChart2, Building2, Layers, Trophy, X } from 'lucide-react';
 
 const Sidebar = ({ isOpen, onClose }) => {
     const { user, logout, facilitySubscription } = useAuth();
@@ -88,6 +88,13 @@ const Sidebar = ({ isOpen, onClose }) => {
                     <NavLink to="/reports" onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
                         <BarChart2 size={20} />
                         <span>Reports</span>
+                    </NavLink>
+                )}
+
+                {['admin', 'superadmin'].includes(role) && !isRestrictedFacilityUser && (
+                    <NavLink to="/gamification" onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+                        <Trophy size={20} />
+                        <span>Gamification</span>
                     </NavLink>
                 )}
             </nav>

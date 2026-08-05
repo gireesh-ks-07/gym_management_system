@@ -20,6 +20,7 @@ const Plans = lazy(() => import('./pages/Plans'));
 const SubscriptionPlans = lazy(() => import('./pages/SubscriptionPlans'));
 const FacilityTypes = lazy(() => import('./pages/FacilityTypes'));
 const HealthProfile = lazy(() => import('./pages/HealthProfile'));
+const Gamification = lazy(() => import('./pages/gamification/Gamification'));
 
 const Loader = () => (
   <div className="loader-container">
@@ -133,6 +134,12 @@ const App = () => {
                 <Route path="/reports" element={
                   <ProtectedRoute roles={['admin', 'superadmin']}>
                     <Reports />
+                  </ProtectedRoute>
+                } />
+
+                <Route path="/gamification" element={
+                  <ProtectedRoute roles={['admin', 'superadmin']}>
+                    <Gamification />
                   </ProtectedRoute>
                 } />
 

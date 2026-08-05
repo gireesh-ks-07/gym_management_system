@@ -70,6 +70,7 @@ const Payments = () => {
                         <thead>
                             <tr>
                                 <th style={{ paddingLeft: '2rem' }}>Payment Info</th>
+                                <th>Plan</th>
                                 <th>Amount</th>
                                 <th>Method</th>
                                 <th>Date</th>
@@ -90,6 +91,9 @@ const Payments = () => {
                                                 Payment ID: {p.paymentId || p.transactionId}
                                             </div>
                                         )}
+                                    </td>
+                                    <td>
+                                        <div style={{ color: 'var(--text-secondary)' }}>{p.Plan?.name || 'N/A'}</div>
                                     </td>
                                     <td>
                                         <div style={{ fontWeight: '700', color: 'var(--success)', fontSize: '1rem' }}>₹{p.amount}</div>

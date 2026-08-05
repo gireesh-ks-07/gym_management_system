@@ -5,6 +5,51 @@ import { useToast } from '../context/ToastContext';
 import { useNavigate } from 'react-router-dom';
 import { formatDate } from '../utils/date';
 
+// Defined at module scope so it isn't recreated on every render (a new component
+// identity each render remounts children and resets their state).
+const StatCard = ({ title, value, icon, color, subtext, path, navigate }) => {
+    // Uppercase alias so it can be used as a JSX element. (Assigning the param
+    // also keeps it "used" — this flat ESLint config has no jsx-uses-vars.)
+    const Icon = icon;
+    return (
+    <div
+        className="card stat-card"
+        style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '1.25rem',
+            padding: '1.75rem',
+            cursor: path ? 'pointer' : 'default',
+            transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+            minHeight: '160px',
+            justifyContent: 'space-between'
+        }}
+        onClick={() => path && navigate(path)}
+    >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div style={{
+                padding: '0.75rem',
+                borderRadius: '16px',
+                background: `${color}15`,
+                color: color,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: `0 8px 16px -4px ${color}20`
+            }}>
+                <Icon size={24} strokeWidth={2.5} />
+            </div>
+        </div>
+
+        <div>
+            <h3 style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', fontWeight: '600', letterSpacing: '0.01em', marginBottom: '4px' }}>{title}</h3>
+            <div style={{ fontSize: '1.75rem', fontWeight: '800', color: 'var(--text-highlight)', letterSpacing: '-0.02em' }}>{value}</div>
+            {subtext && <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px', fontWeight: '500' }}>{subtext}</div>}
+        </div>
+    </div>
+    );
+};
+
 const SuperAdminDashboard = () => {
     const [stats, setStats] = useState({ totalFacilities: 0, activeFacilities: 0, suspendedFacilities: 0, expiredFacilities: 0, mrr: 0 });
     const [expiringFacilities, setExpiringFacilities] = useState([]);
@@ -30,44 +75,6 @@ const SuperAdminDashboard = () => {
         fetchDashboard();
     }, []);
 
-    const StatCard = ({ title, value, icon: Icon, color, subtext, path }) => (
-        <div
-            className="card stat-card"
-            style={{
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '1.25rem',
-                padding: '1.75rem',
-                cursor: path ? 'pointer' : 'default',
-                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                minHeight: '160px',
-                justifyContent: 'space-between'
-            }}
-            onClick={() => path && navigate(path)}
-        >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div style={{
-                    padding: '0.75rem',
-                    borderRadius: '16px',
-                    background: `${color}15`,
-                    color: color,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    boxShadow: `0 8px 16px -4px ${color}20`
-                }}>
-                    <Icon size={24} strokeWidth={2.5} />
-                </div>
-            </div>
-
-            <div>
-                <h3 style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', fontWeight: '600', letterSpacing: '0.01em', marginBottom: '4px' }}>{title}</h3>
-                <div style={{ fontSize: '1.75rem', fontWeight: '800', color: 'var(--text-highlight)', letterSpacing: '-0.02em' }}>{value}</div>
-                {subtext && <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px', fontWeight: '500' }}>{subtext}</div>}
-            </div>
-        </div>
-    );
-
     return (
         <div className="animate-fade-in">
             <div className="page-header" style={{ marginBottom: '2rem' }}>
@@ -77,21 +84,21 @@ const SuperAdminDashboard = () => {
 
             {/* Stats Grid */}
             <div className="dashboard-grid" style={{ marginBottom: '2rem' }}>
-                <StatCard
+                <StatCard navigate={navigate}
                     title="Total Facilities"
                     value={stats.totalFacilities}
                     icon={Users}
                     color="var(--primary)"
                     path="/facilities"
                 />
-                <StatCard
+                <StatCard navigate={navigate}
                     title="Active Facilities"
                     value={stats.activeFacilities}
                     icon={CheckCircle}
                     color="var(--success)"
                     path="/facilities?status=active"
                 />
-                <StatCard
+                <StatCard navigate={navigate}
                     title="Suspended/Blocked"
                     value={stats.suspendedFacilities + stats.expiredFacilities}
                     icon={XCircle}
@@ -99,7 +106,7 @@ const SuperAdminDashboard = () => {
                     subtext={`${stats.expiredFacilities} Expired`}
                     path="/facilities?status=inactive"
                 />
-                <StatCard
+                <StatCard navigate={navigate}
                     title="Recurring Revenue"
                     value={`₹${stats.mrr.toLocaleString()}`}
                     icon={TrendingUp}
@@ -164,7 +171,7 @@ const SuperAdminDashboard = () => {
                             </tr>
                         </thead>
                         <tbody>
-                            {expiringFacilities.map((facility, index) => (
+                            {expiringFacilities.map((facility) => (
                                 <tr key={facility.id}>
                                     <td style={{ paddingLeft: '2rem', fontWeight: '500' }}>{facility.name}</td>
                                     <td>{facility.SubscriptionPlan ? facility.SubscriptionPlan.name : 'N/A'}</td>

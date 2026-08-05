@@ -27,7 +27,9 @@ import {
 } from 'lucide-react';
 import api from '../api';
 import Modal from '../components/Modal';
+import HealthProFeatures from '../components/HealthProFeatures';
 import { useToast } from '../context/ToastContext';
+import { useAuth } from '../context/AuthContext';
 
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -46,9 +48,15 @@ const emptyDay = (index) => ({
 
 const toInputDate = (value) => {
   if (!value) return '-';
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value.trim())) {
+    return value.trim();
+  }
   const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return value;
-  return d.toISOString().split('T')[0];
+  if (Number.isNaN(d.getTime())) return String(value);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 };
 
 const initials = (name = '') =>
@@ -62,6 +70,8 @@ const initials = (name = '') =>
 const HealthProfile = () => {
   const { id } = useParams();
   const { addToast } = useToast();
+  const { facilitySubscription: facility } = useAuth();
+  const hasHealthPro = Boolean(facility?.modules?.healthPro);
   const [loading, setLoading] = useState(true);
   const [showPlanEditor, setShowPlanEditor] = useState(false);
   const [showProfileEditor, setShowProfileEditor] = useState(false);
@@ -69,12 +79,11 @@ const HealthProfile = () => {
   const [showWeightModal, setShowWeightModal] = useState(false);
   const [shiftConfirm, setShiftConfirm] = useState({ isOpen: false, dayNumber: null, note: '', cardioMinutes: '' });
   const [expandedDay, setExpandedDay] = useState(null);
-  const [expandedHistory, setExpandedHistory] = useState(null);
   const [calendarMonth, setCalendarMonth] = useState(() => {
     const d = new Date();
     return new Date(d.getFullYear(), d.getMonth(), 1);
   });
-  const [successPulse, setSuccessPulse] = useState(false);
+  const [, setSuccessPulse] = useState(false);
   const [member, setMember] = useState(null);
   const [dashboard, setDashboard] = useState({});
   const [profile, setProfile] = useState({
@@ -246,12 +255,6 @@ const HealthProfile = () => {
     return map;
   }, [profile.workoutCalendar]);
 
-  const dayFocusMap = useMemo(() => {
-    const map = new Map();
-    (profile.currentSchedule?.days || []).forEach((d) => map.set(Number(d.dayNumber), d.focus || 'Workout'));
-    return map;
-  }, [profile.currentSchedule]);
-
   const nextWorkoutDay = useMemo(() => {
     if (dashboard.nextWorkoutDay != null) return Number(dashboard.nextWorkoutDay);
     const days = profile.currentSchedule?.days || [];
@@ -291,8 +294,11 @@ const HealthProfile = () => {
       const date = new Date(year, month, idx + 1);
       const key = toInputDate(date);
       const events = eventMap.get(key) || [];
-      const statuses = [...new Set(events.map((x) => x.status).filter(Boolean))];
-      const hasDone = statuses.includes('done');
+      const rawStatuses = [...new Set(events.map((x) => x.status).filter(Boolean))];
+      const hasDone = rawStatuses.includes('done');
+      const statuses = hasDone
+        ? ['done', ...rawStatuses.filter((s) => s !== 'done')]
+        : rawStatuses;
       return { key, day: idx + 1, isBlank: false, statuses, events, hasDone };
     });
     return [...leading, ...days];
@@ -305,7 +311,8 @@ const HealthProfile = () => {
       targetWeight: profile.targetWeight || '',
       height: profile.height || '',
       bodyFatPercentage: profile.bodyFatPercentage || '',
-      notes: profile.notes || ''
+      notes: profile.notes || '',
+      supplementNotes: profile.supplementNotes || ''
     });
     setShowProfileEditor(true);
   };
@@ -348,7 +355,7 @@ const HealthProfile = () => {
       await api.post(`/clients/${id}/workout-schedules/${scheduleId}/day-log`, {
         dayNumber,
         status,
-        date: new Date().toISOString().split('T')[0],
+        date: toInputDate(new Date()),
         note,
         cardioMinutes
       });
@@ -575,14 +582,14 @@ const HealthProfile = () => {
               ))}
               {calendarMeta.map((item, i) => {
                 if (item.isBlank) return <div key={`blank-${i}`} />;
-
-                const isToday = new Date().toDateString() === new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), item.day).toDateString();
-                const hasDone = item.events.some(e => e.status === 'done');
+                const todayKey = toInputDate(new Date());
+                const isToday = item.key === todayKey;
+                const hasDone = item.hasDone;
 
                 return (
                   <div
                     key={item.key}
-                    className={`calendar-day-cell \${isToday ? 'today' : ''} \${hasDone ? 'active-day' : ''}`}
+                    className={`calendar-day-cell ${isToday ? 'today' : ''} ${hasDone ? 'active-day' : ''}`}
                   >
                     <span>{item.day}</span>
                     <div className="workout-dots">
@@ -692,20 +699,46 @@ const HealthProfile = () => {
               )}
             </div>
           </div>
+
+          {(profile.notes || profile.supplementNotes) && (
+            <div className="glass-panel" style={{ marginTop: '20px' }}>
+              <div className="section-title"><Activity size={18} /> Notes & Supplements</div>
+              <div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                {profile.notes && (
+                  <div>
+                    <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '4px' }}>General Notes</div>
+                    <div style={{ fontSize: '0.9rem', color: 'var(--text-main)', lineHeight: '1.5', whiteSpace: 'pre-wrap' }}>{profile.notes}</div>
+                  </div>
+                )}
+                {profile.supplementNotes && (
+                  <div>
+                    <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '4px' }}>Supplement Stack</div>
+                    <div style={{ fontSize: '0.9rem', color: 'var(--text-main)', lineHeight: '1.5', whiteSpace: 'pre-wrap' }}>{profile.supplementNotes}</div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Health Pro Features (Phase 2) */}
+          {hasHealthPro && (
+            <HealthProFeatures profile={profile} clientId={id} fetchData={fetchData} />
+          )}
         </div>
       </div>
 
       {/* Editor Modal */}
       <Modal isOpen={showProfileEditor} onClose={() => setShowProfileEditor(false)} title="Edit Health Goals">
         <div className="form-grid">
-          <div className="input-group"><label className="input-label">Goal Type</label><select className="input-field" value={profileDraft.goalType || ''} onChange={(e) => setProfileDraft({ ...profileDraft, goalType: e.target.value })}><option value="">Select</option><option value="weight_loss">Weight Loss</option><option value="weight_gain">Weight Gain</option><option value="muscle_gain">Muscle Gain</option></select></div>
+          <div className="input-group"><label className="input-label">Goal Type</label><select className="input-field" value={profileDraft.goalType || ''} onChange={(e) => setProfileDraft({ ...profileDraft, goalType: e.target.value })}><option value="">Select</option><option value="weight_loss">Weight Loss</option><option value="weight_gain">Weight Gain</option><option value="muscle_gain">Muscle Gain</option><option value="strength">Strength</option><option value="sports_performance">Sports Performance</option></select></div>
           <div className="input-group"><label className="input-label">Current Weight</label><input className="input-field" type="number" value={profileDraft.currentWeight || ''} onChange={(e) => setProfileDraft({ ...profileDraft, currentWeight: e.target.value })} /></div>
           <div className="input-group"><label className="input-label">Target Weight</label><input className="input-field" type="number" value={profileDraft.targetWeight || ''} onChange={(e) => setProfileDraft({ ...profileDraft, targetWeight: e.target.value })} /></div>
           <div className="input-group"><label className="input-label">Height (cm)</label><input className="input-field" type="number" value={profileDraft.height || ''} onChange={(e) => setProfileDraft({ ...profileDraft, height: e.target.value })} /></div>
         </div>
         <div className="form-grid">
           <div className="input-group"><label className="input-label">Body Fat %</label><input className="input-field" type="number" value={profileDraft.bodyFatPercentage || ''} onChange={(e) => setProfileDraft({ ...profileDraft, bodyFatPercentage: e.target.value })} /></div>
-          <div className="input-group"><label className="input-label">Notes</label><input className="input-field" value={profileDraft.notes || ''} onChange={(e) => setProfileDraft({ ...profileDraft, notes: e.target.value })} /></div>
+          <div className="input-group"><label className="input-label">Notes</label><textarea className="input-field" rows="2" value={profileDraft.notes || ''} onChange={(e) => setProfileDraft({ ...profileDraft, notes: e.target.value })} /></div>
+          <div className="input-group"><label className="input-label">Supplement Notes</label><textarea className="input-field" rows="2" value={profileDraft.supplementNotes || ''} onChange={(e) => setProfileDraft({ ...profileDraft, supplementNotes: e.target.value })} /></div>
         </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 12 }}>
           <button className="btn btn-secondary" onClick={() => setShowProfileEditor(false)}>Cancel</button>
