@@ -13,6 +13,7 @@ const DEFAULT_XP_RULES = [
     { code: 'workout_long', label: 'Workout Over 60 Minutes', xp: 25, category: 'workout', frequency: 'once_per_day' },
     { code: 'cardio_completed', label: 'Cardio Completed', xp: 20, category: 'workout', frequency: 'once_per_day' },
     { code: 'nutrition_logged', label: 'Nutrition Logged', xp: 20, category: 'nutrition', frequency: 'once_per_day' },
+    { code: 'water_logged', label: 'Water Intake Logged', xp: 10, category: 'nutrition', frequency: 'once_per_day' },
     { code: 'weight_updated', label: 'Weight Updated', xp: 10, category: 'health', frequency: 'once_per_day' },
     { code: 'measurements_updated', label: 'Body Measurements Updated', xp: 10, category: 'health', frequency: 'once_per_day' },
     { code: 'progress_photo', label: 'Progress Photo Uploaded', xp: 20, category: 'health', frequency: 'once_per_day' },

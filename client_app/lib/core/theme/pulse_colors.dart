@@ -11,13 +11,15 @@ class PulseColors {
   PulseColors._();
 
   // ---- Theme-invariant accents (unchanged in light & dark) ----------------
+  // Palette ported 1:1 from the PulseFit reference (vigor-member-suite):
+  // primary = blue, accent = green, accent2 = flame.
   static const Color primary = Color(0xFF3B82F6);
-  static const Color primaryEnd = Color(0xFF52A9FE);
+  static const Color primaryEnd = Color(0xFF52A9FE); // --primary-glow
   static const Color accent = Color(0xFF22C55E);
-  static const Color accentEnd = Color(0xFF00C3BB);
+  static const Color accentEnd = Color(0xFF00C3BB); // --gradient-accent end (teal)
   static const Color accent2 = Color(0xFFFD6D20);
   static const Color accent2End = Color(0xFFF59E0B);
-  static const Color success = Color(0xFF10B981);
+  static const Color success = Color(0xFF22C55E);
   static const Color warning = Color(0xFFF59E0B);
   static const Color destructive = Color(0xFFEF4444);
 
@@ -73,16 +75,16 @@ class PulseColors {
     textMuted = light ? _lightTextMuted : _darkTextMuted;
   }
 
-  // Dark value set
-  static const Color _darkBackground = Color(0xFF0F172A);
-  static const Color _darkForeground = Color(0xFFF6F9FC);
-  static const Color _darkSurface = Color(0xFF1B2437);
-  static const Color _darkSurface2 = Color(0xFF273043);
-  static const Color _darkPopover = Color(0xFF161F31);
-  static const Color _darkCard = Color(0x0FFFFFFF); // white / .06
+  // Dark value set — ported from the PulseFit reference tokens.
+  static const Color _darkBackground = Color(0xFF0F172A); // --background
+  static const Color _darkForeground = Color(0xFFF6F9FC); // --foreground
+  static const Color _darkSurface = Color(0xFF1B2437); // --surface
+  static const Color _darkSurface2 = Color(0xFF273043); // --surface-2
+  static const Color _darkPopover = Color(0xFF161F31); // --popover (solid menus)
+  static const Color _darkCard = Color(0x0FFFFFFF); // --card = white / .06 (glass over background)
   static const Color _darkBorder = Color(0x1AFFFFFF); // white / .10
   static const Color _darkInput = Color(0x1FFFFFFF); // white / .12
-  static const Color _darkTextMuted = Color(0xFF99A6B8);
+  static const Color _darkTextMuted = Color(0xFF99A6B8); // --muted-foreground
 
   // Light value set (aligned with the React admin's [data-theme='light'] tokens)
   static const Color _lightBackground = Color(0xFFF1F5F9); // slate-100

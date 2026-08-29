@@ -14,7 +14,8 @@ const Plans = () => {
     const [isEditMode, setIsEditMode] = useState(false);
     const [currentPlanId, setCurrentPlanId] = useState(null);
     const [formData, setFormData] = useState({
-        name: '', price: '', duration: '', description: '', features: ''
+        name: '', price: '', duration: '', description: '', features: '',
+        planType: 'normal', ptSessionsCount: '', ptSessionPeriod: 'weekly'
     });
 
     const location = useLocation();
@@ -38,7 +39,7 @@ const Plans = () => {
         const queryParams = new URLSearchParams(location.search);
         if (queryParams.get('action') === 'add') {
             setIsEditMode(false);
-            setFormData({ name: '', price: '', duration: '', description: '', features: '' });
+            setFormData({ name: '', price: '', duration: '', description: '', features: '', planType: 'normal', ptSessionsCount: '', ptSessionPeriod: 'weekly' });
             setShowModal(true);
             navigate(location.pathname, { replace: true });
         }
@@ -52,7 +53,10 @@ const Plans = () => {
             price: plan.price,
             duration: plan.duration,
             description: plan.description || '',
-            features: plan.features ? (Array.isArray(plan.features) ? plan.features.join('\n') : plan.features) : ''
+            features: plan.features ? (Array.isArray(plan.features) ? plan.features.join('\n') : plan.features) : '',
+            planType: plan.planType || 'normal',
+            ptSessionsCount: plan.ptSessionsCount ?? '',
+            ptSessionPeriod: plan.ptSessionPeriod || 'weekly'
         });
         setShowModal(true);
     };
@@ -77,7 +81,7 @@ const Plans = () => {
 
     const handleAddClick = () => {
         setIsEditMode(false);
-        setFormData({ name: '', price: '', duration: '', description: '', features: '' });
+        setFormData({ name: '', price: '', duration: '', description: '', features: '', planType: 'normal', ptSessionsCount: '', ptSessionPeriod: 'weekly' });
         setShowModal(true);
     };
 
@@ -98,10 +102,18 @@ const Plans = () => {
             return;
         }
 
+        if (formData.planType === 'pt' && Number(formData.ptSessionsCount) <= 0) {
+            addToast('PT plans require a session count greater than 0', 'error');
+            return;
+        }
+
         try {
             const payload = {
                 ...formData,
-                features: formData.features.split('\n').filter(f => f.trim() !== '')
+                features: formData.features.split('\n').filter(f => f.trim() !== ''),
+                planType: formData.planType,
+                ptSessionsCount: formData.planType === 'pt' ? Number(formData.ptSessionsCount) : null,
+                ptSessionPeriod: formData.planType === 'pt' ? formData.ptSessionPeriod : null
             };
 
             if (isEditMode) {
@@ -111,7 +123,7 @@ const Plans = () => {
                 await api.post('/plans', payload);
                 addToast('Plan created successfully', 'success');
             }
-            setFormData({ name: '', price: '', duration: '', description: '', features: '' });
+            setFormData({ name: '', price: '', duration: '', description: '', features: '', planType: 'normal', ptSessionsCount: '', ptSessionPeriod: 'weekly' });
             setShowModal(false);
             fetchPlans();
         } catch {
@@ -175,7 +187,14 @@ const Plans = () => {
                             </div>
 
                             <div style={{ marginBottom: '1rem' }}>
-                                <h3 style={{ fontSize: '1.25rem', fontWeight: '800', color: 'var(--text-highlight)', letterSpacing: '-0.01em', marginBottom: '0.25rem' }}>{plan.name}</h3>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem', flexWrap: 'wrap' }}>
+                                    <h3 style={{ fontSize: '1.25rem', fontWeight: '800', color: 'var(--text-highlight)', letterSpacing: '-0.01em' }}>{plan.name}</h3>
+                                    {plan.planType === 'pt' && (
+                                        <span style={{ fontSize: '0.65rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#6366F1', background: 'rgba(99,102,241,0.12)', padding: '2px 8px', borderRadius: 999 }}>
+                                            PT · {plan.ptSessionsCount}/{plan.ptSessionPeriod === 'monthly' ? 'mo' : 'wk'}
+                                        </span>
+                                    )}
+                                </div>
                                 <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.3rem' }}>
                                     <span style={{ fontSize: '1.75rem', fontWeight: '900', color: 'var(--text-highlight)', letterSpacing: '-0.02em' }}>₹{plan.price}</span>
                                     <span style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', fontWeight: '600' }}>/ term</span>
@@ -229,6 +248,37 @@ const Plans = () => {
                         <label className="input-label">Plan Name</label>
                         <input className="input-field" required value={formData.name} onChange={e => setFormData({ ...formData, name: toTitleCase(e.target.value) })} placeholder="e.g. Gold Membership" />
                     </div>
+                    <div className="input-group">
+                        <label className="input-label">Plan Type</label>
+                        <div style={{ display: 'flex', gap: '0.75rem' }}>
+                            {[{ key: 'normal', label: 'Normal' }, { key: 'pt', label: 'Personal Training' }].map(opt => {
+                                const active = formData.planType === opt.key;
+                                return (
+                                    <button type="button" key={opt.key} onClick={() => setFormData({ ...formData, planType: opt.key })} style={{
+                                        flex: 1, padding: '0.7rem', borderRadius: 12, cursor: 'pointer', fontWeight: 700, fontSize: '0.9rem',
+                                        border: `1.5px solid ${active ? 'var(--primary)' : 'var(--border-color)'}`,
+                                        background: active ? 'var(--bg-active)' : 'transparent',
+                                        color: active ? 'var(--primary)' : 'var(--text-secondary)'
+                                    }}>{opt.label}</button>
+                                );
+                            })}
+                        </div>
+                    </div>
+                    {formData.planType === 'pt' && (
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', padding: '1rem', background: 'var(--bg-body)', borderRadius: 12, border: '1px solid var(--border-color)', marginBottom: '1rem' }}>
+                            <div className="input-group" style={{ margin: 0 }}>
+                                <label className="input-label">PT Sessions</label>
+                                <input className="input-field" type="number" min="1" value={formData.ptSessionsCount} onChange={e => setFormData({ ...formData, ptSessionsCount: e.target.value })} placeholder="e.g. 12" />
+                            </div>
+                            <div className="input-group" style={{ margin: 0 }}>
+                                <label className="input-label">Per Period</label>
+                                <select className="input-field" value={formData.ptSessionPeriod} onChange={e => setFormData({ ...formData, ptSessionPeriod: e.target.value })}>
+                                    <option value="weekly">Per Week</option>
+                                    <option value="monthly">Per Month</option>
+                                </select>
+                            </div>
+                        </div>
+                    )}
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
                         <div className="input-group">
                             <label className="input-label">Price (₹)</label>

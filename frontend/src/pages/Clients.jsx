@@ -427,6 +427,11 @@ const Clients = () => {
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: '500', gridColumn: 'span 2' }}>
                                 <Target size={14} color="var(--primary)" />
                                 <span>{client.Plan?.name || 'No active plan'}</span>
+                                {client.Plan?.planType === 'pt' && (
+                                    <span style={{ fontSize: '0.62rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#6366F1', background: 'rgba(99,102,241,0.12)', padding: '2px 7px', borderRadius: 999, whiteSpace: 'nowrap' }}>
+                                        PT · {client.Plan.ptSessionsCount}/{client.Plan.ptSessionPeriod === 'monthly' ? 'mo' : 'wk'}
+                                    </span>
+                                )}
                             </div>
                         </div>
 

@@ -46,7 +46,7 @@ const User = sequelize.define('User', {
     email: { type: DataTypes.STRING, allowNull: false, unique: true },
     password: { type: DataTypes.STRING, allowNull: false },
     role: {
-        type: DataTypes.ENUM('superadmin', 'admin', 'staff'),
+        type: DataTypes.ENUM('superadmin', 'admin', 'staff', 'dietician'),
         defaultValue: 'staff'
     },
     phone: { type: DataTypes.STRING, allowNull: true },
@@ -128,7 +128,10 @@ const Client = sequelize.define('Client', {
     customFields: { type: DataTypes.JSON, defaultValue: {} } // Store custom field values
     ,
     healthProfile: { type: DataTypes.JSON, defaultValue: {} },
-    workoutPlans: { type: DataTypes.JSON, defaultValue: [] }
+    workoutPlans: { type: DataTypes.JSON, defaultValue: [] },
+    // Dietician assigned to this member (nullable). Set by admins; scopes which
+    // clients a dietician can see and create diet charts for.
+    dieticianId: { type: DataTypes.INTEGER, allowNull: true }
 });
 
 const Attendance = sequelize.define('Attendance', {
@@ -152,7 +155,22 @@ const Plan = sequelize.define('Plan', {
     price: { type: DataTypes.FLOAT, allowNull: false },
     duration: { type: DataTypes.INTEGER, allowNull: false }, // in months
     description: { type: DataTypes.STRING, allowNull: true },
-    features: { type: DataTypes.JSON, defaultValue: [] }
+    features: { type: DataTypes.JSON, defaultValue: [] },
+    // --- Personal Training (PT) support ---
+    // Additive columns. Existing plans default to 'normal' and behave exactly
+    // as before. PT plans additionally define a session allowance per period.
+    planType: {
+        type: DataTypes.ENUM('normal', 'pt'),
+        allowNull: false,
+        defaultValue: 'normal'
+    },
+    // Number of PT sessions granted per period (null for normal plans).
+    ptSessionsCount: { type: DataTypes.INTEGER, allowNull: true },
+    // Whether the session allowance resets weekly or monthly.
+    ptSessionPeriod: {
+        type: DataTypes.ENUM('weekly', 'monthly'),
+        allowNull: true
+    }
 });
 
 const Notification = sequelize.define('Notification', {
@@ -195,6 +213,10 @@ Client.belongsTo(Facility, { foreignKey: 'facilityId' });
 
 User.hasMany(Client, { as: 'addedClients', foreignKey: 'addedBy' });
 Client.belongsTo(User, { as: 'addedByStaff', foreignKey: 'addedBy' });
+
+// Dietician (User) ↔ assigned clients
+User.hasMany(Client, { as: 'dieticianClients', foreignKey: 'dieticianId' });
+Client.belongsTo(User, { as: 'dietician', foreignKey: 'dieticianId' });
 
 Client.hasMany(Payment, { foreignKey: 'clientId' });
 Payment.belongsTo(Client, { foreignKey: 'clientId' });
@@ -302,9 +324,17 @@ Client.addHook('afterFind', (result) => {
 const { defineGamificationModels } = require('../gamification/models');
 const gamificationModels = defineGamificationModels(sequelize, { Client, Facility, User, Notification });
 
+const { defineNutritionModels } = require('./nutrition');
+const nutritionModels = defineNutritionModels(sequelize, { Client, Facility, User });
+
+const { definePTModels } = require('./pt');
+const ptModels = definePTModels(sequelize, { Client, Facility, User });
+
 module.exports = {
     sequelize,
     User, Facility, Client, Payment, Plan, SubscriptionPlan,
     Attendance, Notification, FacilityType, FacilityAutoPayEvent,
-    ...gamificationModels
+    ...gamificationModels,
+    ...nutritionModels,
+    ...ptModels
 };

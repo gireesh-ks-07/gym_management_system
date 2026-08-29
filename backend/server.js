@@ -18,6 +18,9 @@ const { Op } = require('sequelize');
 const gamification = require('./gamification/engine');
 const { registerGamificationRoutes } = require('./gamification/routes');
 const { seedGamificationDefaults } = require('./gamification/seed');
+const { registerNutritionRoutes } = require('./routes/nutrition');
+const { registerPTRoutes } = require('./routes/pt');
+const { registerDieticianRoutes } = require('./routes/dietician');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -750,7 +753,7 @@ app.post('/api/auth/register', authenticate, authorize(['superadmin']), async (r
     try {
         const { name, email, password, role, facilityId } = req.body;
         // Superadmin accounts can only be seeded server-side, never via the API.
-        const allowedRoles = ['admin', 'staff'];
+        const allowedRoles = ['admin', 'staff', 'dietician'];
         if (!allowedRoles.includes(role)) {
             return res.status(400).json({ message: `Role must be one of: ${allowedRoles.join(', ')}` });
         }
@@ -1630,14 +1633,17 @@ app.post('/api/clients', authenticate, checkSubscriptionStatus, authorize(['admi
 app.post('/api/staff', authenticate, checkSubscriptionStatus, authorize(['admin']), async (req, res) => {
     try {
         const { name, email, password, role } = req.body;
-        if (role !== 'staff') return res.status(400).json({ message: 'Admins create staff only' });
+        // Admins may create general staff or dieticians.
+        const allowedStaffRoles = ['staff', 'dietician'];
+        const newRole = allowedStaffRoles.includes(role) ? role : 'staff';
 
         const facility = await getFacilityPlanContext(req.user.facilityId);
         if (!facility) return res.status(404).json({ message: 'Facility not found' });
 
         const maxStaff = facility.SubscriptionPlan?.maxStaff;
         if (maxStaff != null) {
-            const currentStaff = await User.count({ where: { facilityId: req.user.facilityId, role: 'staff' } });
+            // Both staff and dieticians count against the plan's staff allowance.
+            const currentStaff = await User.count({ where: { facilityId: req.user.facilityId, role: { [Op.in]: allowedStaffRoles } } });
             if (currentStaff >= maxStaff) {
                 await createLimitExceededNotification(facility, 'staff', maxStaff, currentStaff + 1);
                 return res.status(403).json({
@@ -1652,13 +1658,13 @@ app.post('/api/staff', authenticate, checkSubscriptionStatus, authorize(['admin'
             name,
             email,
             password,
-            role: 'staff',
+            role: newRole,
             facilityId: req.user.facilityId
         });
 
         // Add Notification for Facility Admin
         await Notification.create({
-            message: `New staff member "${name}" has been added.`,
+            message: `New ${newRole === 'dietician' ? 'dietician' : 'staff member'} "${name}" has been added.`,
             type: 'success',
             facilityId: req.user.facilityId,
             path: '/staff'
@@ -1672,7 +1678,7 @@ app.post('/api/staff', authenticate, checkSubscriptionStatus, authorize(['admin'
 
 app.get('/api/staff', authenticate, checkSubscriptionStatus, authorize(['admin']), async (req, res) => {
     try {
-        const staff = await User.findAll({ where: { facilityId: req.user.facilityId, role: 'staff' } });
+        const staff = await User.findAll({ where: { facilityId: req.user.facilityId, role: { [Op.in]: ['staff', 'dietician'] } } });
         res.json(staff);
     } catch (error) {
         sendServerError(res, error);
@@ -1681,11 +1687,32 @@ app.get('/api/staff', authenticate, checkSubscriptionStatus, authorize(['admin']
 
 // --- PLAN ROUTES (Admin) ---
 
+// Normalize the PT-related fields from a plan payload. Returns sane values for
+// both normal plans (PT fields cleared) and PT plans (validated allowance).
+const normalizePlanTypeFields = (body) => {
+    const planType = body.planType === 'pt' ? 'pt' : 'normal';
+    if (planType !== 'pt') {
+        return { planType: 'normal', ptSessionsCount: null, ptSessionPeriod: null };
+    }
+    const count = parseInt(body.ptSessionsCount, 10);
+    const period = body.ptSessionPeriod === 'monthly' ? 'monthly' : 'weekly';
+    return {
+        planType: 'pt',
+        ptSessionsCount: Number.isFinite(count) && count > 0 ? count : null,
+        ptSessionPeriod: period
+    };
+};
+
 app.post('/api/plans', authenticate, checkSubscriptionStatus, authorize(['admin']), async (req, res) => {
     try {
         const { name, price, duration, description, features } = req.body;
+        const ptFields = normalizePlanTypeFields(req.body);
+        if (ptFields.planType === 'pt' && !ptFields.ptSessionsCount) {
+            return res.status(400).json({ message: 'PT plans require a session count greater than 0' });
+        }
         const plan = await Plan.create({
             name, price, duration, description, features,
+            ...ptFields,
             facilityId: req.user.facilityId
         });
         res.json(plan);
@@ -1701,11 +1728,19 @@ app.put('/api/plans/:id', authenticate, checkSubscriptionStatus, authorize(['adm
 
         if (!plan) return res.status(404).json({ message: 'Plan not found' });
 
+        const ptFields = normalizePlanTypeFields(req.body);
+        if (ptFields.planType === 'pt' && !ptFields.ptSessionsCount) {
+            return res.status(400).json({ message: 'PT plans require a session count greater than 0' });
+        }
+
         plan.name = name;
         plan.price = price;
         plan.duration = duration;
         plan.description = description;
         plan.features = features;
+        plan.planType = ptFields.planType;
+        plan.ptSessionsCount = ptFields.ptSessionsCount;
+        plan.ptSessionPeriod = ptFields.ptSessionPeriod;
 
         await plan.save();
         res.json(plan);
@@ -2690,6 +2725,42 @@ app.post('/api/clients/:id/health-profile/goal-reviews', authenticate, checkSubs
     } catch (error) { sendServerError(res, error); }
 });
 
+// Supplements — POST a structured supplement (type + name)
+app.post('/api/clients/:id/health-profile/supplements', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+    try {
+        const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
+        if (!client) return res.status(404).json({ message: 'Client not found' });
+        const name = (req.body.name || '').toString().trim();
+        if (!name) return res.status(400).json({ message: 'Supplement name is required.' });
+        const profile = getHealthState(client);
+        const entry = {
+            id: `sup_${Date.now()}`,
+            type: (req.body.type || '').toString().trim(),
+            name,
+            dosage: (req.body.dosage || '').toString().trim(),
+            notes: (req.body.notes || '').toString().trim(),
+            createdAt: new Date().toISOString()
+        };
+        profile.supplements = [entry, ...(profile.supplements || [])];
+        client.healthProfile = profile;
+        await client.save();
+        res.json({ entry, supplements: profile.supplements });
+    } catch (error) { sendServerError(res, error); }
+});
+
+// Supplements — DELETE a supplement by id
+app.delete('/api/clients/:id/health-profile/supplements/:supplementId', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+    try {
+        const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
+        if (!client) return res.status(404).json({ message: 'Client not found' });
+        const profile = getHealthState(client);
+        profile.supplements = (profile.supplements || []).filter((s) => s.id !== req.params.supplementId);
+        client.healthProfile = profile;
+        await client.save();
+        res.json({ supplements: profile.supplements });
+    } catch (error) { sendServerError(res, error); }
+});
+
 // Invoice endpoint — GET payment invoice data
 app.get('/api/payments/:id/invoice', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
     try {
@@ -3021,7 +3092,7 @@ app.post('/api/clients/:id/weekly-weight', authenticate, checkSubscriptionStatus
 app.put('/api/staff/:id', authenticate, checkSubscriptionStatus, authorize(['admin']), async (req, res) => {
     try {
         const { name, email } = req.body;
-        const staff = await User.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId, role: 'staff' } });
+        const staff = await User.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId, role: { [Op.in]: ['staff', 'dietician'] } } });
 
         if (!staff) return res.status(404).json({ message: 'Staff member not found' });
 
@@ -3036,8 +3107,12 @@ app.put('/api/staff/:id', authenticate, checkSubscriptionStatus, authorize(['adm
 
 app.delete('/api/staff/:id', authenticate, checkSubscriptionStatus, authorize(['admin']), async (req, res) => {
     try {
-        const staff = await User.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId, role: 'staff' } });
+        const staff = await User.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId, role: { [Op.in]: ['staff', 'dietician'] } } });
         if (!staff) return res.status(404).json({ message: 'Staff member not found' });
+        // Detach any clients assigned to this dietician before removing them.
+        if (staff.role === 'dietician') {
+            await Client.update({ dieticianId: null }, { where: { dieticianId: staff.id, facilityId: req.user.facilityId } });
+        }
         await staff.destroy();
         res.json({ message: 'Staff deleted successfully' });
     } catch (error) {
@@ -3109,6 +3184,15 @@ app.post('/api/notifications/mark-all-read', authenticate, async (req, res) => {
 
 // --- GAMIFICATION ROUTES (client app + admin portal) ---
 registerGamificationRoutes(app, { authenticate, authorize, checkSubscriptionStatus, sendServerError });
+
+// --- NUTRITION ROUTES ---
+registerNutritionRoutes(app, { authenticate, authorize, checkSubscriptionStatus, sendServerError });
+
+// --- PERSONAL TRAINING ROUTES ---
+registerPTRoutes(app, { authenticate, authorize, checkSubscriptionStatus, sendServerError });
+
+// --- DIETICIAN / DIET CHART ROUTES ---
+registerDieticianRoutes(app, { authenticate, authorize, checkSubscriptionStatus, sendServerError });
 
 // Initialize DB and Start Server
 // Global Error Handler

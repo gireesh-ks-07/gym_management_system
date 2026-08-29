@@ -8,6 +8,9 @@ import '../../features/health/presentation/health_screen.dart';
 import '../../features/payments/presentation/payments_screen.dart';
 import '../../features/profile/presentation/profile_screen.dart';
 import '../../features/workout/presentation/workout_screen.dart';
+import '../../features/nutrition/presentation/nutrition_screen.dart';
+import '../../features/nutrition/presentation/diet_chart_screen.dart';
+import '../../features/pt/presentation/pt_screen.dart';
 import '../../features/gamification/presentation/gamification_screen.dart';
 import '../../features/gamification/presentation/leaderboard_screen.dart';
 import '../../features/gamification/presentation/league_screen.dart';
@@ -46,6 +49,9 @@ final appRouter = GoRouter(
     _route('/payments', const PaymentsScreen()),
     _route('/profile', const ProfileScreen()),
     _route('/workout', const WorkoutScreen()),
+    _route('/nutrition', const NutritionScreen()),
+    _route('/diet-plan', const DietChartScreen()),
+    _route('/personal-training', const PtScreen()),
     _route('/gamification', const GamificationScreen()),
     _route('/gamification/leaderboard', const LeaderboardScreen()),
     _route('/gamification/league', const LeagueScreen()),

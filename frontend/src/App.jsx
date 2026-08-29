@@ -21,6 +21,8 @@ const SubscriptionPlans = lazy(() => import('./pages/SubscriptionPlans'));
 const FacilityTypes = lazy(() => import('./pages/FacilityTypes'));
 const HealthProfile = lazy(() => import('./pages/HealthProfile'));
 const Gamification = lazy(() => import('./pages/gamification/Gamification'));
+const Nutrition = lazy(() => import('./pages/nutrition/Nutrition'));
+const PersonalTraining = lazy(() => import('./pages/pt/PersonalTraining'));
 
 const Loader = () => (
   <div className="loader-container">
@@ -29,6 +31,10 @@ const Loader = () => (
   </div>
 );
 
+// Where each role should land when it hits a route it isn't allowed on.
+// Dieticians have a restricted workspace centred on the Nutrition section.
+const homePathForRole = (role) => (role === 'dietician' ? '/nutrition' : '/');
+
 const ProtectedRoute = ({ children, roles }) => {
   const { user, loading, facilitySubscription } = useAuth();
   const [isSidebarOpen, setIsSidebarOpen] = React.useState(false);
@@ -36,7 +42,10 @@ const ProtectedRoute = ({ children, roles }) => {
 
   if (loading) return <Loader />;
   if (!user) return <Navigate to="/login" />;
-  if (roles && !roles.includes(user.role)) return <Navigate to="/" />;
+  if (roles && !roles.includes(user.role)) {
+    const home = homePathForRole(user.role);
+    return <Navigate to={location.pathname === home ? '/login' : home} />;
+  }
 
   const isRestrictedFacilityUser =
     ['admin', 'staff'].includes(user.role) &&
@@ -140,6 +149,18 @@ const App = () => {
                 <Route path="/gamification" element={
                   <ProtectedRoute roles={['admin', 'superadmin']}>
                     <Gamification />
+                  </ProtectedRoute>
+                } />
+
+                <Route path="/nutrition" element={
+                  <ProtectedRoute roles={['admin', 'staff', 'dietician']}>
+                    <Nutrition />
+                  </ProtectedRoute>
+                } />
+
+                <Route path="/personal-training" element={
+                  <ProtectedRoute roles={['admin', 'staff']}>
+                    <PersonalTraining />
                   </ProtectedRoute>
                 } />
 

@@ -190,7 +190,7 @@ const Dashboard = () => {
     const memberLimitExceeded = memberLimit !== null && Number(stats.totalClients) >= Number(memberLimit);
     const staffLimitExceeded = staffLimit !== null && Number(stats.activeStaff) >= Number(staffLimit);
 
-    const COLORS = ['var(--primary)', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6'];
+    const COLORS = ['var(--primary)', 'var(--info)', 'var(--warning)', 'var(--danger)', 'var(--achievement)'];
 
     // Mock sparkline data since we don't have real historical data for all KPIs
     const Sparkline = ({ color }) => (
@@ -321,28 +321,28 @@ const Dashboard = () => {
                     title="Total Members"
                     value={stats.totalClients}
                     icon={<Users size={24} />}
-                    color="#22c55e"
+                    color="#3B82F6"
                     path="/clients"
                 />
                 <StatCard
                     title="Monthly Revenue"
                     value={`₹${stats.totalRevenue.toLocaleString()}`}
                     icon={<Wallet size={24} />}
-                    color="#10B981"
+                    color="#FF6B00"
                     path="/payments"
                 />
                 <StatCard
                     title="Active Staff"
                     value={stats.activeStaff}
                     icon={<Activity size={24} />}
-                    color="#f59e0b"
+                    color="#FFB000"
                     path="/staff"
                 />
                 <StatCard
                     title="Expired Members"
                     value={stats.expiredClients ?? stats.dueClients ?? 0}
                     icon={<AlertCircle size={24} />}
-                    color="#ef4444"
+                    color="#EF4444"
                     path="/clients?status=payment_due"
                 />
             </div>
@@ -365,8 +365,8 @@ const Dashboard = () => {
                             <AreaChart data={revenueChartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
                                 <defs>
                                     <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="5%" stopColor="#22c55e" stopOpacity={0.3} />
-                                        <stop offset="95%" stopColor="#22c55e" stopOpacity={0} />
+                                        <stop offset="5%" stopColor="#FF6B00" stopOpacity={0.15} />
+                                        <stop offset="95%" stopColor="#FF6B00" stopOpacity={0} />
                                     </linearGradient>
                                 </defs>
                                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border-color)" />
@@ -399,7 +399,7 @@ const Dashboard = () => {
                                 <Area
                                     type="monotone"
                                     dataKey="amount"
-                                    stroke="#22c55e"
+                                    stroke="#FF6B00"
                                     strokeWidth={3}
                                     fillOpacity={1}
                                     fill="url(#colorRevenue)"

@@ -16,7 +16,7 @@ class PulseGlassCard extends StatefulWidget {
     required this.child,
     this.padding = const EdgeInsets.all(16.0),
     this.onTap,
-    this.borderRadius = 16.0,
+    this.borderRadius = 24.0,
     this.animateTap = true,
     this.color,
     this.border,

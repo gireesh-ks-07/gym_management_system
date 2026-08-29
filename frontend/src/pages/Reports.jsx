@@ -59,7 +59,7 @@ const Reports = () => {
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.5rem', marginBottom: '3rem' }}>
-                <StatCard title="Total Revenue" value={`₹${stats.revenue.total}`} icon={<DollarSign size={28} />} color="#10b981" />
+                <StatCard title="Total Revenue" value={`₹${stats.revenue.total}`} icon={<DollarSign size={28} />} color="#FF6B00" />
                 <StatCard title="Cash Revenue" value={`₹${stats.revenue.cash}`} icon={<Wallet size={28} />} color="#f59e0b" />
                 <StatCard title="UPI Revenue" value={`₹${stats.revenue.upi}`} icon={<CreditCard size={28} />} color="#6366f1" />
             </div>
@@ -107,7 +107,7 @@ const Reports = () => {
                 {/* Recent Transactions */}
                 <div className="card" style={{ padding: '2rem' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '2rem' }}>
-                        <div style={{ padding: '10px', background: 'rgba(16, 185, 129, 0.1)', borderRadius: '10px', color: '#10b981' }}>
+                        <div style={{ padding: '10px', background: 'rgba(255, 107, 0, 0.1)', borderRadius: '10px', color: 'var(--primary)' }}>
                             <RefreshCw size={24} />
                         </div>
                         <h3 style={{ fontSize: '1.25rem', fontWeight: '600' }}>Recent Transactions</h3>

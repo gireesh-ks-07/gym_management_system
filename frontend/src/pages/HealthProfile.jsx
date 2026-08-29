@@ -16,6 +16,7 @@ import {
   Dumbbell,
   Flame,
   Footprints,
+  Moon,
   PencilLine,
   Sparkles,
   Target,
@@ -23,9 +24,12 @@ import {
   X,
   Zap,
   TrendingUp,
-  Scale
+  Scale,
+  Apple,
+  Stethoscope
 } from 'lucide-react';
 import api from '../api';
+import { dieticianApi } from '../api/dietician';
 import Modal from '../components/Modal';
 import HealthProFeatures from '../components/HealthProFeatures';
 import { useToast } from '../context/ToastContext';
@@ -34,10 +38,10 @@ import { useAuth } from '../context/AuthContext';
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 const STATUS_THEME = {
-  done: { label: 'Completed', color: '#10b981', dotColor: '#10b981' },
-  missed: { label: 'Missed', color: '#ef4444', dotColor: '#ef4444' },
-  off_day: { label: 'Off Day', color: '#f59e0b', dotColor: '#f59e0b' },
-  cardio: { label: 'Cardio', color: '#3b82f6', dotColor: '#3b82f6' }
+  done: { label: 'Completed', color: '#22C55E', icon: Check },
+  missed: { label: 'Missed', color: '#EF4444', icon: X },
+  off_day: { label: 'Off Day', color: '#FBBF24', icon: Moon },
+  cardio: { label: 'Cardio', color: '#3B82F6', icon: Footprints }
 };
 
 const emptyDay = (index) => ({
@@ -70,8 +74,9 @@ const initials = (name = '') =>
 const HealthProfile = () => {
   const { id } = useParams();
   const { addToast } = useToast();
-  const { facilitySubscription: facility } = useAuth();
+  const { user, facilitySubscription: facility } = useAuth();
   const hasHealthPro = Boolean(facility?.modules?.healthPro);
+  const isAdmin = user?.role === 'admin' || user?.role === 'superadmin';
   const [loading, setLoading] = useState(true);
   const [showPlanEditor, setShowPlanEditor] = useState(false);
   const [showProfileEditor, setShowProfileEditor] = useState(false);
@@ -127,22 +132,35 @@ const HealthProfile = () => {
   });
   const [creationExpandedDayIdx, setCreationExpandedDayIdx] = useState(0);
 
-  const fetchData = async () => {
-    setLoading(true);
+  // Dietician assignment state
+  const [dietician, setDietician] = useState(null); // currently assigned dietician { id, name } or null
+  const [dieticians, setDieticians] = useState([]); // facility dieticians (admin dropdown)
+  const [assigningDietician, setAssigningDietician] = useState(false);
+
+  const fetchData = async (showLoader = false) => {
+    if (showLoader) setLoading(true);
     try {
       const res = await api.get(`/clients/${id}/health-profile`);
       setMember({ id: res.data.clientId, name: res.data.name, phone: res.data.phone });
       setProfile((prev) => ({ ...prev, ...(res.data.healthProfile || {}) }));
       setDashboard(res.data.dashboard || {});
+      
+      // Fetch this client's assigned dietician (+ dietician list for admins)
+      try {
+        const clients = await dieticianApi.getClients(facility?.id);
+        const me = clients.find((c) => String(c.id) === String(id));
+        setDietician(me?.dietician || null);
+        if (isAdmin) setDieticians(await dieticianApi.getDieticians(facility?.id));
+      } catch { /* dietician module optional — ignore */ }
     } catch (e) {
       addToast(e?.response?.data?.message || 'Failed to load health profile', 'error');
     } finally {
-      setLoading(false);
+      if (showLoader) setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchData();
+    fetchData(true);
   }, [id]);
 
   const sortedWeights = useMemo(() => {
@@ -203,16 +221,16 @@ const HealthProfile = () => {
 
   const trendTone = useMemo(() => {
     if (profile.goalType === 'weight_loss') {
-      if (metrics.weekDelta > 0.2) return '#ef4444'; // Red
-      if (metrics.weekDelta > -0.2) return '#f59e0b'; // Amber
-      return '#10b981'; // Green
+      if (metrics.weekDelta > 0.2) return '#EF4444'; // Red
+      if (metrics.weekDelta > -0.2) return '#FBBF24'; // Amber
+      return '#22C55E'; // Green
     }
     if (profile.goalType === 'weight_gain' || profile.goalType === 'muscle_gain') {
-      if (metrics.weekDelta < -0.1) return '#ef4444';
-      if (metrics.weekDelta < 0.2) return '#f59e0b';
-      return '#10b981';
+      if (metrics.weekDelta < -0.1) return '#EF4444';
+      if (metrics.weekDelta < 0.2) return '#FBBF24';
+      return '#22C55E';
     }
-    return '#10b981';
+    return '#22C55E';
   }, [profile.goalType, metrics.weekDelta]);
 
   // Insights
@@ -295,10 +313,20 @@ const HealthProfile = () => {
       const key = toInputDate(date);
       const events = eventMap.get(key) || [];
       const rawStatuses = [...new Set(events.map((x) => x.status).filter(Boolean))];
-      const hasDone = rawStatuses.includes('done');
-      const statuses = hasDone
-        ? ['done', ...rawStatuses.filter((s) => s !== 'done')]
-        : rawStatuses;
+      const hierarchy = { done: 1, cardio: 2, missed: 3, off_day: 4 };
+      rawStatuses.sort((a, b) => (hierarchy[a] || 99) - (hierarchy[b] || 99));
+
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const isPast = date < today;
+
+      let singleStatus = rawStatuses.length > 0 ? rawStatuses[0] : null;
+      if (!singleStatus && isPast) {
+        singleStatus = 'off_day';
+      }
+
+      const statuses = singleStatus ? [singleStatus] : [];
+      const hasDone = singleStatus !== null;
       return { key, day: idx + 1, isBlank: false, statuses, events, hasDone };
     });
     return [...leading, ...days];
@@ -318,6 +346,10 @@ const HealthProfile = () => {
   };
 
   const saveProfile = async (data = profileDraft) => {
+    if (data.currentWeight && (isNaN(data.currentWeight) || data.currentWeight < 0 || data.currentWeight > 500)) return addToast('Invalid current weight', 'error');
+    if (data.targetWeight && (isNaN(data.targetWeight) || data.targetWeight < 0 || data.targetWeight > 500)) return addToast('Invalid target weight', 'error');
+    if (data.height && (isNaN(data.height) || data.height < 0 || data.height > 300)) return addToast('Invalid height', 'error');
+    if (data.bodyFatPercentage && (isNaN(data.bodyFatPercentage) || data.bodyFatPercentage < 0 || data.bodyFatPercentage > 100)) return addToast('Invalid body fat percentage', 'error');
     try {
       await api.put(`/clients/${id}/health-profile`, data);
       addToast('Health profile saved', 'success');
@@ -371,11 +403,16 @@ const HealthProfile = () => {
   };
 
   const addDayLog = async () => {
+    if (!dayLog.date) return addToast('Date is required', 'error');
+    if (dayLog.status === 'cardio' && (!dayLog.cardioMinutes || isNaN(dayLog.cardioMinutes) || dayLog.cardioMinutes <= 0 || dayLog.cardioMinutes > 1440)) {
+      return addToast('Valid cardio minutes are required (1-1440)', 'error');
+    }
     const scheduleId = profile.currentSchedule?.id;
     if (!scheduleId) return addToast('No active schedule found', 'error');
     try {
       await api.post(`/clients/${id}/workout-schedules/${scheduleId}/day-log`, dayLog);
       addToast('Workout log updated', 'success');
+      setShowQuickLog(false);
       fetchData();
     } catch (e) {
       addToast(e?.response?.data?.message || 'Failed to log workout', 'error');
@@ -383,7 +420,10 @@ const HealthProfile = () => {
   };
 
   const addWeeklyWeight = async () => {
-    if (!weightForm.weight) return addToast('Weight is required', 'error');
+    if (!weightForm.date) return addToast('Date is required', 'error');
+    if (!weightForm.weight || isNaN(weightForm.weight) || weightForm.weight <= 0 || weightForm.weight > 500) {
+      return addToast('Valid weight is required (1-500)', 'error');
+    }
     try {
       await api.post(`/clients/${id}/weekly-weight`, weightForm);
       setWeightForm((s) => ({ ...s, weight: '' }));
@@ -392,6 +432,20 @@ const HealthProfile = () => {
       fetchData();
     } catch (e) {
       addToast(e?.response?.data?.message || 'Failed to add weekly weight', 'error');
+    }
+  };
+
+  const handleAssignDietician = async (dieticianId) => {
+    setAssigningDietician(true);
+    try {
+      if (dieticianId) await dieticianApi.assignClient(dieticianId, id);
+      else await dieticianApi.unassignClient(id);
+      addToast(dieticianId ? 'Dietician assigned' : 'Dietician removed', 'success');
+      await fetchData();
+    } catch (e) {
+      addToast(e?.response?.data?.error || 'Failed to update dietician', 'error');
+    } finally {
+      setAssigningDietician(false);
     }
   };
 
@@ -493,11 +547,26 @@ const HealthProfile = () => {
               <button className="btn btn-ghost" style={{ justifyContent: 'flex-start', border: '1px solid var(--border-color)', borderRadius: '12px' }} onClick={() => setShowPlanEditor(true)}>
                 <Dumbbell size={16} /> Update Plan
               </button>
-              <button className="btn btn-ghost" style={{ justifyContent: 'flex-start', border: '1px solid var(--border-color)', borderRadius: '12px' }} onClick={() => setShowQuickLog(!showQuickLog)}>
+              <button className="btn btn-ghost" style={{ justifyContent: 'flex-start', border: '1px solid var(--border-color)', borderRadius: '12px' }} onClick={() => {
+                setDayLog({
+                  dayNumber: '',
+                  status: 'cardio',
+                  date: toInputDate(new Date()),
+                  note: '',
+                  cardioMinutes: ''
+                });
+                setShowQuickLog(true);
+              }}>
                 <Footprints size={16} /> Log Cardio
               </button>
             </div>
           </div>
+
+          {/* Health Pro cards — left group (fills the space beside the calendar) */}
+          {hasHealthPro && (
+            <HealthProFeatures profile={profile} clientId={id} fetchData={fetchData}
+              sections={['measurements', 'prs', 'supplements']} />
+          )}
         </div>
 
         {/* Middle Column - Chart & Calendar - Spans 6 columns */}
@@ -520,14 +589,14 @@ const HealthProfile = () => {
                   <AreaChart data={sortedWeights}>
                     <defs>
                       <linearGradient id="colorWeight" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor={trendTone} stopOpacity={0.3} />
-                        <stop offset="95%" stopColor={trendTone} stopOpacity={0} />
+                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.15} />
+                        <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
                     <XAxis
                       dataKey="date"
-                      stroke="var(--text-muted)"
+                      stroke="var(--text-secondary)"
                       tick={{ fontSize: 11 }}
                       tickLine={false}
                       axisLine={false}
@@ -538,7 +607,7 @@ const HealthProfile = () => {
                     />
                     <YAxis
                       domain={['auto', 'auto']}
-                      stroke="var(--text-muted)"
+                      stroke="var(--text-secondary)"
                       tick={{ fontSize: 11 }}
                       tickLine={false}
                       axisLine={false}
@@ -547,11 +616,11 @@ const HealthProfile = () => {
                     <Tooltip
                       contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: '8px' }}
                       itemStyle={{ color: '#fff' }}
-                      labelStyle={{ color: '#94a3b8' }}
+                      labelStyle={{ color: 'var(--text-secondary)' }}
                     />
-                    <Area type="monotone" dataKey="weight" stroke={trendTone} strokeWidth={3} fillOpacity={1} fill="url(#colorWeight)" />
+                    <Area type="monotone" dataKey="weight" stroke="#10b981" strokeWidth={3} fillOpacity={1} fill="url(#colorWeight)" />
                     {profile.targetWeight && (
-                      <Line type="monotone" dataKey={() => Number(profile.targetWeight)} stroke="#fbbf24" strokeDasharray="5 5" strokeWidth={2} dot={false} activeDot={false} />
+                      <Line type="monotone" dataKey={() => Number(profile.targetWeight)} stroke="#22C55E" strokeDasharray="5 5" strokeWidth={2} dot={false} activeDot={false} />
                     )}
                   </AreaChart>
                 </ResponsiveContainer>
@@ -592,10 +661,13 @@ const HealthProfile = () => {
                     className={`calendar-day-cell ${isToday ? 'today' : ''} ${hasDone ? 'active-day' : ''}`}
                   >
                     <span>{item.day}</span>
-                    <div className="workout-dots">
-                      {item.statuses.slice(0, 3).map((status, idx) => (
-                        <div key={idx} className="workout-dot" style={{ backgroundColor: STATUS_THEME[status]?.dotColor || '#94a3b8' }} />
-                      ))}
+                    <div className="workout-dots" style={{ display: 'flex', gap: '2px', marginTop: '4px' }}>
+                      {item.statuses.slice(0, 1).map((status, idx) => {
+                        const StatusIcon = STATUS_THEME[status]?.icon;
+                        return StatusIcon ? (
+                          <StatusIcon key={idx} size={16} color={STATUS_THEME[status]?.color} />
+                        ) : null;
+                      })}
                     </div>
                   </div>
                 );
@@ -603,12 +675,15 @@ const HealthProfile = () => {
             </div>
 
             <div style={{ display: 'flex', gap: '1rem', marginTop: '1.5rem', justifyContent: 'center' }}>
-              {Object.entries(STATUS_THEME).map(([key, val]) => (
-                <div key={key} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                  <div style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: val.color }}></div>
-                  {val.label}
-                </div>
-              ))}
+              {Object.entries(STATUS_THEME).map(([key, val]) => {
+                const Icon = val.icon;
+                return (
+                  <div key={key} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                    {Icon ? <Icon size={14} color={val.color} /> : <div style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: val.color }}></div>}
+                    {val.label}
+                  </div>
+                );
+              })}
             </div>
           </div>
 
@@ -683,6 +758,49 @@ const HealthProfile = () => {
           </div>
 
           <div className="glass-panel">
+            <div className="section-title"><Stethoscope size={18} /> Dietician</div>
+
+            <div style={{ marginTop: '1rem', padding: '1.25rem', background: 'var(--bg-body)', border: '1px solid var(--border-color)', borderRadius: '12px' }}>
+              {dietician ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', marginBottom: isAdmin ? '1.25rem' : 0 }}>
+                  <div style={{
+                    width: 42, height: 42, borderRadius: 12, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    background: 'linear-gradient(135deg, var(--primary), #34D399)', color: '#fff', fontWeight: 700, fontSize: '0.9rem'
+                  }}>{(dietician.name || '?').trim().split(/\s+/).slice(0, 2).map((w) => w[0] || '').join('').toUpperCase()}</div>
+                  <div>
+                    <div style={{ fontWeight: 600, color: 'var(--text-main)' }}>{dietician.name}</div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Assigned dietician</div>
+                  </div>
+                </div>
+              ) : (
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', margin: isAdmin ? '0 0 1.25rem' : 0 }}>
+                  No dietician assigned yet.
+                </p>
+              )}
+
+              {isAdmin && (
+                <div className="input-group" style={{ marginBottom: 0 }}>
+                  <label className="input-label">{dietician ? 'Change / remove dietician' : 'Assign a dietician'}</label>
+                  <select
+                    className="input-field"
+                    value={dietician?.id || ''}
+                    disabled={assigningDietician}
+                    onChange={(e) => handleAssignDietician(e.target.value)}
+                  >
+                    <option value="">— Unassigned —</option>
+                    {dieticians.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                  </select>
+                  {dieticians.length === 0 && (
+                    <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.4rem' }}>
+                      No dieticians yet. Add one from the Staff section (choose the “Dietician” role).
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="glass-panel">
             <div className="section-title"><Trophy size={18} /> History</div>
             <div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
               {(profile.pastSchedules || []).length === 0 ? (
@@ -720,9 +838,10 @@ const HealthProfile = () => {
             </div>
           )}
 
-          {/* Health Pro Features (Phase 2) */}
+          {/* Health Pro cards — right group (fills the space beside the calendar) */}
           {hasHealthPro && (
-            <HealthProFeatures profile={profile} clientId={id} fetchData={fetchData} />
+            <HealthProFeatures profile={profile} clientId={id} fetchData={fetchData}
+              sections={['tests', 'mobility', 'reviews']} />
           )}
         </div>
       </div>
@@ -753,29 +872,24 @@ const HealthProfile = () => {
             width: '64px', height: '64px', borderRadius: '50%',
             background: 'rgba(59, 130, 246, 0.1)',
             color: 'var(--accent-blue)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            margin: '0 auto 1.5rem',
-            boxShadow: '0 0 20px rgba(59, 130, 246, 0.2)'
+            display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1rem'
           }}>
-            <AlertCircle size={32} />
+            <Footprints size={32} />
           </div>
-          <h3 style={{ fontSize: '1.25rem', marginBottom: '0.75rem', color: 'var(--text-highlight)' }}>Shift Program Forward?</h3>
-          <p style={{ color: 'var(--text-secondary)', marginBottom: '2rem', lineHeight: '1.6' }}>
-            Do you want to shift the workout program forward to make up for this missed session?
+          <h3 style={{ marginBottom: '1rem' }}>Shift to Cardio/Recovery?</h3>
+          <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem', fontSize: '0.9rem' }}>
+            Instead of marking as missed, did you do any cardio or recovery work?
           </p>
-          <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
-            <button className="btn btn-secondary" onClick={() => {
-              executeMarkWorkout({ status: 'missed', ...shiftConfirm, note: shiftConfirm.note, scheduleId: profile.currentSchedule?.id });
-              setShiftConfirm({ isOpen: false, dayNumber: null, note: '', cardioMinutes: '' });
-            }}>
-              No, Keep Schedule
-            </button>
+          <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}>
+            <button className="btn btn-ghost" onClick={() => {
+              executeMarkWorkout({ status: 'missed', dayNumber: shiftConfirm.dayNumber, note: 'Missed' });
+              setShiftConfirm({ isOpen: false, dayNumber: null });
+            }}>No, Mark Missed</button>
             <button className="btn btn-primary" onClick={() => {
-              executeMarkWorkout({ status: 'missed', ...shiftConfirm, note: `${shiftConfirm.note ? shiftConfirm.note + ' | ' : ''}Shift requested`, scheduleId: profile.currentSchedule?.id });
-              setShiftConfirm({ isOpen: false, dayNumber: null, note: '', cardioMinutes: '' });
-            }}>
-              Yes, Shift Forward
-            </button>
+              setDayLog({ dayNumber: shiftConfirm.dayNumber, status: 'cardio', date: toInputDate(new Date()), note: 'Shifted to Cardio', cardioMinutes: '30' });
+              setShiftConfirm({ isOpen: false, dayNumber: null });
+              setShowQuickLog(true);
+            }}>Log Cardio</button>
           </div>
         </div>
       </Modal>

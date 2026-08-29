@@ -1,7 +1,7 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { LayoutDashboard, Users, LogOut, Settings, Tag, CreditCard, BarChart2, Building2, Layers, Trophy, X } from 'lucide-react';
+import { LayoutDashboard, Users, LogOut, Settings, Tag, CreditCard, BarChart2, Building2, Layers, Trophy, X, Apple, Dumbbell } from 'lucide-react';
 
 const Sidebar = ({ isOpen, onClose }) => {
     const { user, logout, facilitySubscription } = useAuth();
@@ -30,10 +30,12 @@ const Sidebar = ({ isOpen, onClose }) => {
             </div>
 
             <nav style={{ flex: 1, overflowY: 'auto', paddingRight: '0.5rem' }}>
-                <NavLink to="/" onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-                    <LayoutDashboard size={20} />
-                    <span>Dashboard</span>
-                </NavLink>
+                {role !== 'dietician' && (
+                    <NavLink to="/" onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+                        <LayoutDashboard size={20} />
+                        <span>Dashboard</span>
+                    </NavLink>
+                )}
 
                 {role === 'superadmin' && (
                     <NavLink to="/facilities" onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
@@ -95,6 +97,20 @@ const Sidebar = ({ isOpen, onClose }) => {
                     <NavLink to="/gamification" onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
                         <Trophy size={20} />
                         <span>Gamification</span>
+                    </NavLink>
+                )}
+
+                {['admin', 'staff', 'dietician'].includes(role) && !isRestrictedFacilityUser && (
+                    <NavLink to="/nutrition" onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+                        <Apple size={20} />
+                        <span>{role === 'dietician' ? 'Diet Charts' : 'Nutrition'}</span>
+                    </NavLink>
+                )}
+
+                {['admin', 'staff'].includes(role) && !isRestrictedFacilityUser && (
+                    <NavLink to="/personal-training" onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+                        <Dumbbell size={20} />
+                        <span>Personal Training</span>
                     </NavLink>
                 )}
             </nav>

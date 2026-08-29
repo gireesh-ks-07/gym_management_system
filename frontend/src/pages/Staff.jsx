@@ -265,6 +265,22 @@ const Staff = () => {
                     </div>
                     {!isEditMode && (
                         <div className="input-group">
+                            <label className="input-label">Role</label>
+                            <select
+                                className="input-field"
+                                value={formData.role}
+                                onChange={e => setFormData({ ...formData, role: e.target.value })}
+                            >
+                                <option value="staff">Staff</option>
+                                <option value="dietician">Dietician</option>
+                            </select>
+                            <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.4rem' }}>
+                                Dieticians get a restricted login to manage diet charts for the members assigned to them.
+                            </p>
+                        </div>
+                    )}
+                    {!isEditMode && (
+                        <div className="input-group">
                             <label className="input-label">Temporary Password</label>
                             <PasswordInput
                                 required

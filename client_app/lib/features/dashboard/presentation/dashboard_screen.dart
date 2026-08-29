@@ -11,6 +11,8 @@ import '../../../shared/widgets/pulse_ring.dart';
 import '../../../shared/widgets/pulse_states.dart';
 import '../../member/data/member_controller.dart';
 import '../../member/data/member_model.dart';
+import '../../pt/data/pt_repository.dart';
+import '../../nutrition/data/nutrition_repository.dart';
 
 class DashboardScreen extends ConsumerWidget {
   const DashboardScreen({super.key});
@@ -38,6 +40,12 @@ class _Content extends ConsumerWidget {
     final c = me.client;
     final bmi = Derive.bmi(c.height, c.weight);
 
+    // Only surface Personal Training for members actually on a PT plan.
+    final pt = ref.watch(clientPtProvider).asData?.value;
+
+    // Only surface the Diet Plan when a dietician has shared a chart.
+    final dietChart = ref.watch(dietChartProvider).asData?.value;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -52,14 +60,26 @@ class _Content extends ConsumerWidget {
         _sectionHeader('Quick actions', null, null),
         const SizedBox(height: 12),
         _quickActions(context),
+        if (pt != null && pt.hasPT && pt.usage != null) ...[
+          const SizedBox(height: 24),
+          _sectionHeader('Personal Training', 'View', () => context.go('/personal-training')),
+          const SizedBox(height: 12),
+          _ptCard(context, pt),
+        ],
+        if (dietChart != null) ...[
+          const SizedBox(height: 24),
+          _sectionHeader('Diet Plan', 'View', () => context.go('/diet-plan')),
+          const SizedBox(height: 12),
+          _dietChartCard(context, dietChart),
+        ],
         const SizedBox(height: 24),
         _sectionHeader('Health overview', 'Details', () => context.go('/health')),
         const SizedBox(height: 12),
         _healthOverview(context, c, bmi),
         const SizedBox(height: 24),
-        _sectionHeader('Recent check-ins', 'All', () => context.go('/attendance')),
+        _sectionHeader('This week', 'All', () => context.go('/attendance')),
         const SizedBox(height: 12),
-        _recentAttendance(),
+        _thisWeek(context).animate().fadeIn(delay: 100.ms).slideY(begin: 0.06, end: 0),
         if (c.hasDue) ...[
           const SizedBox(height: 24),
           _dueBanner(context),
@@ -309,8 +329,8 @@ class _Content extends ConsumerWidget {
   Widget _quickActions(BuildContext context) {
     final actions = [
       (_QA('Workout', Iconsax.weight_1, '/workout', PulseColors.primary)),
-      (_QA('Health', Iconsax.heart, '/health', PulseColors.accent)),
-      (_QA('Attendance', Iconsax.calendar_tick, '/attendance', PulseColors.accent2)),
+      (_QA('Diet', Iconsax.reserve, '/nutrition', PulseColors.accent2)),
+      (_QA('Attendance', Iconsax.calendar_tick, '/attendance', PulseColors.accent)),
       (_QA('Payments', Iconsax.card, '/payments', PulseColors.warning)),
     ];
     return Row(
@@ -420,55 +440,119 @@ class _Content extends ConsumerWidget {
     );
   }
 
-  // ── Recent attendance ──
-  Widget _recentAttendance() {
-    if (me.recentAttendance.isEmpty) {
-      return const PulseEmpty(
-        icon: Iconsax.calendar_1,
-        title: 'No check-ins yet',
-        subtitle: 'Your gym visits will show up here.',
-      );
+  // ── This week (training attendance strip; workout-calendar statuses,
+  //     same vocabulary as the Attendance screen: Completed/Missed/Off Day/Cardio) ──
+  Widget _thisWeek(BuildContext context) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final monday = today.subtract(Duration(days: today.weekday - 1));
+
+    // Map this member's workout calendar by y-m-d.
+    String key(DateTime d) => '${d.year}-${d.month}-${d.day}';
+    final byDay = <String, String>{};
+    for (final e in me.client.health.workoutCalendar) {
+      final d = Derive.parseDate(e['date']);
+      final s = e['status']?.toString();
+      if (d != null && s != null) byDay[key(DateTime(d.year, d.month, d.day))] = s;
     }
-    return Column(
-      children: me.recentAttendance.take(4).map((a) {
-        final color = a.status == 'present'
-            ? PulseColors.accent
-            : a.status == 'excused'
-                ? PulseColors.warning
-                : PulseColors.destructive;
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 10),
-          child: PulseGlassCard(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            child: Row(
-              children: [
-                Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(color: color.withOpacity(0.15), shape: BoxShape.circle),
-                  child: Icon(Iconsax.tick_circle, color: color, size: 18),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(Derive.date(a.date, pattern: 'EEE, dd MMM'),
-                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: PulseColors.foreground)),
-                      if (a.checkInTime != null)
-                        Text('In ${a.checkInTime}',
-                            style: TextStyle(fontSize: 12, color: PulseColors.textMuted)),
-                    ],
-                  ),
-                ),
-                Text(Derive.titleCase(a.status),
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: color)),
-              ],
+
+    const letters = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+    const dark = Color(0xFF0F172A);
+    int completed = 0, missed = 0, cardio = 0, tracked = 0;
+    final cells = <Widget>[];
+    for (var i = 0; i < 7; i++) {
+      final day = monday.add(Duration(days: i));
+      final status = byDay[key(day)];
+      Color bg;
+      Color fg;
+      switch (status) {
+        case 'done':
+          bg = PulseColors.success;
+          fg = dark;
+          completed++;
+          tracked++;
+          break;
+        case 'cardio':
+          bg = PulseColors.primary;
+          fg = dark;
+          cardio++;
+          tracked++;
+          break;
+        case 'missed':
+          bg = PulseColors.destructive;
+          fg = Colors.white;
+          missed++;
+          tracked++;
+          break;
+        case 'off_day':
+          bg = PulseColors.warning;
+          fg = dark;
+          tracked++;
+          break;
+        default:
+          bg = PulseColors.surface2;
+          fg = PulseColors.textMuted;
+      }
+      final isToday = day == today;
+      cells.add(Expanded(
+        child: Column(
+          children: [
+            Text(letters[i], style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: PulseColors.textMuted)),
+            const SizedBox(height: 8),
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: bg,
+                shape: BoxShape.circle,
+                border: isToday ? Border.all(color: PulseColors.foreground.withOpacity(0.9), width: 2) : null,
+              ),
+              alignment: Alignment.center,
+              child: Text('${day.day}', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: fg)),
             ),
+          ],
+        ),
+      ));
+    }
+
+    final rate = tracked == 0 ? 0 : (((completed + cardio) / tracked) * 100).round();
+
+    return PulseGlassCard(
+      borderRadius: 28,
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+      child: Column(
+        children: [
+          Row(children: cells),
+          const SizedBox(height: 14),
+          Divider(color: PulseColors.border, height: 1),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              _legendDot(PulseColors.success, '$completed done'),
+              const SizedBox(width: 12),
+              _legendDot(PulseColors.primary, '$cardio cardio'),
+              const SizedBox(width: 12),
+              _legendDot(PulseColors.destructive, '$missed missed'),
+              const Spacer(),
+              Icon(Iconsax.trend_up, size: 15, color: PulseColors.success),
+              const SizedBox(width: 4),
+              Text('$rate%', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: PulseColors.success)),
+            ],
           ),
-        );
-      }).toList(),
-    ).animate().fadeIn(delay: 250.ms).slideY(begin: 0.06, end: 0);
+        ],
+      ),
+    );
+  }
+
+  Widget _legendDot(Color color, String label) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(width: 8, height: 8, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+        const SizedBox(width: 5),
+        Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: PulseColors.textMuted)),
+      ],
+    );
   }
 
   // ── Due banner ──
@@ -509,6 +593,90 @@ class _Content extends ConsumerWidget {
         ],
       ),
     );
+  }
+
+  // ── Personal Training summary (only for PT-plan members) ──
+  Widget _ptCard(BuildContext context, ClientPt pt) {
+    final u = pt.usage!;
+    final pct = u.allowed > 0 ? (u.used / u.allowed).clamp(0.0, 1.0) : 0.0;
+    final tone = u.atLimit ? PulseColors.destructive : (pct >= 0.75 ? PulseColors.warning : PulseColors.success);
+    return PulseGlassCard(
+      padding: const EdgeInsets.all(16),
+      onTap: () => context.go('/personal-training'),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(color: PulseColors.primary.withOpacity(0.15), borderRadius: BorderRadius.circular(14)),
+                child: const Icon(Iconsax.weight_1, color: PulseColors.primary, size: 22),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('${u.used} / ${u.allowed} sessions used',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: PulseColors.foreground)),
+                    Text('${u.remaining} remaining this ${u.periodLabel}',
+                        style: TextStyle(fontSize: 13, color: PulseColors.textMuted)),
+                  ],
+                ),
+              ),
+              Icon(Iconsax.arrow_right_3, size: 18, color: PulseColors.textMuted),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: LinearProgressIndicator(
+              value: pct,
+              minHeight: 7,
+              backgroundColor: PulseColors.surface2,
+              valueColor: AlwaysStoppedAnimation(tone),
+            ),
+          ),
+        ],
+      ),
+    ).animate().fadeIn(delay: 200.ms).slideY(begin: 0.06, end: 0);
+  }
+
+  Widget _dietChartCard(BuildContext context, DietChart chart) {
+    final meals = chart.meals.length;
+    final subtitle = chart.dieticianName != null && chart.dieticianName!.isNotEmpty
+        ? 'by ${chart.dieticianName}'
+        : '$meals meal${meals == 1 ? '' : 's'}';
+    return PulseGlassCard(
+      padding: const EdgeInsets.all(16),
+      onTap: () => context.go('/diet-plan'),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(color: PulseColors.accent.withOpacity(0.15), borderRadius: BorderRadius.circular(14)),
+            child: const Icon(Iconsax.document_text, color: PulseColors.accent, size: 22),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(chart.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: PulseColors.foreground)),
+                Text(subtitle, style: TextStyle(fontSize: 13, color: PulseColors.textMuted)),
+              ],
+            ),
+          ),
+          Icon(Iconsax.arrow_right_3, size: 18, color: PulseColors.textMuted),
+        ],
+      ),
+    ).animate().fadeIn(delay: 220.ms).slideY(begin: 0.06, end: 0);
   }
 
   // ── Start workout shortcut ──
