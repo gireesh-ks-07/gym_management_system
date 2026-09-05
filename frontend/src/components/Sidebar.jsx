@@ -1,15 +1,15 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { can, isFacilityBlocked } from '../config/roles';
 import { LayoutDashboard, Users, LogOut, Settings, Tag, CreditCard, BarChart2, Building2, Layers, Trophy, X, Apple, Dumbbell } from 'lucide-react';
 
 const Sidebar = ({ isOpen, onClose }) => {
     const { user, logout, facilitySubscription } = useAuth();
     const role = user?.role;
-    const isRestrictedFacilityUser =
-        ['admin', 'staff'].includes(role) &&
-        facilitySubscription &&
-        facilitySubscription.subscriptionStatus !== 'active';
+    const isRestrictedFacilityUser = isFacilityBlocked(role, facilitySubscription);
+    // A nav item shows when the role may open the route and the facility is live.
+    const show = (routeKey) => can(routeKey, role) && !isRestrictedFacilityUser;
 
     return (
         <div className={`sidebar ${isOpen ? 'open' : ''}`}>
@@ -30,84 +30,84 @@ const Sidebar = ({ isOpen, onClose }) => {
             </div>
 
             <nav style={{ flex: 1, overflowY: 'auto', paddingRight: '0.5rem' }}>
-                {role !== 'dietician' && (
+                {show('dashboard') && (
                     <NavLink to="/" onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
                         <LayoutDashboard size={20} />
                         <span>Dashboard</span>
                     </NavLink>
                 )}
 
-                {role === 'superadmin' && (
+                {show('facilities') && (
                     <NavLink to="/facilities" onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
                         <Building2 size={20} />
                         <span>Facilities</span>
                     </NavLink>
                 )}
 
-                {role === 'superadmin' && (
+                {show('subscriptionPlans') && (
                     <NavLink to="/subscription-plans" onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
                         <Tag size={20} />
                         <span>SaaS Plans</span>
                     </NavLink>
                 )}
 
-                {role === 'superadmin' && (
+                {show('facilityTypes') && (
                     <NavLink to="/facility-types" onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
                         <Layers size={20} />
                         <span>Facility Types</span>
                     </NavLink>
                 )}
 
-                {['admin', 'staff'].includes(role) && !isRestrictedFacilityUser && (
+                {show('members') && (
                     <NavLink to="/clients" onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
                         <Users size={20} />
                         <span>Members</span>
                     </NavLink>
                 )}
 
-                {role === 'admin' && !isRestrictedFacilityUser && (
+                {show('plans') && (
                     <NavLink to="/plans" onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
                         <Tag size={20} />
                         <span>Plans</span>
                     </NavLink>
                 )}
 
-                {role === 'admin' && !isRestrictedFacilityUser && (
+                {show('staff') && (
                     <NavLink to="/staff" onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
                         <Settings size={20} />
                         <span>Staff</span>
                     </NavLink>
                 )}
 
-                {['admin', 'staff'].includes(role) && !isRestrictedFacilityUser && (
+                {show('payments') && (
                     <NavLink to="/payments" onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
                         <CreditCard size={20} />
                         <span>Payments</span>
                     </NavLink>
                 )}
 
-                {['admin', 'superadmin'].includes(role) && !isRestrictedFacilityUser && (
+                {show('reports') && (
                     <NavLink to="/reports" onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
                         <BarChart2 size={20} />
                         <span>Reports</span>
                     </NavLink>
                 )}
 
-                {['admin', 'superadmin'].includes(role) && !isRestrictedFacilityUser && (
+                {show('gamification') && (
                     <NavLink to="/gamification" onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
                         <Trophy size={20} />
                         <span>Gamification</span>
                     </NavLink>
                 )}
 
-                {['admin', 'staff', 'dietician'].includes(role) && !isRestrictedFacilityUser && (
+                {show('nutrition') && (
                     <NavLink to="/nutrition" onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
                         <Apple size={20} />
                         <span>{role === 'dietician' ? 'Diet Charts' : 'Nutrition'}</span>
                     </NavLink>
                 )}
 
-                {['admin', 'staff'].includes(role) && !isRestrictedFacilityUser && (
+                {show('personalTraining') && (
                     <NavLink to="/personal-training" onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
                         <Dumbbell size={20} />
                         <span>Personal Training</span>

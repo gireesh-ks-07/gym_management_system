@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Search, Bell, Plus, User, Building2, UserCog, Tag, CreditCard, Sun, Moon } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { can, isFacilityBlocked } from '../config/roles';
 import { useTheme } from '../context/ThemeContext';
 import { useLocation, useNavigate } from 'react-router-dom';
 import api from '../api';
@@ -16,10 +17,13 @@ const Navbar = ({ toggleSidebar }) => {
     const menuRef = useRef(null);
     const notificationRef = useRef(null);
     const [notifications, setNotifications] = useState([]);
-    const isRestrictedFacilityUser =
-        ['admin', 'staff'].includes(user?.role) &&
-        facilitySubscription &&
-        facilitySubscription.subscriptionStatus !== 'active';
+    const role = user?.role;
+    const isRestrictedFacilityUser = isFacilityBlocked(role, facilitySubscription);
+    // Only offer a shortcut the role can actually follow — otherwise the click
+    // lands on a route ProtectedRoute immediately bounces them off.
+    const quick = (routeKey) => can(routeKey, role) && !isRestrictedFacilityUser;
+    const hasQuickAdd = ['members', 'staff', 'plans', 'payments', 'facilities', 'subscriptionPlans']
+        .some(quick);
 
     const fetchNotifications = async () => {
         try {
@@ -81,7 +85,7 @@ const Navbar = ({ toggleSidebar }) => {
 
     const handleSearchChange = (value) => {
         setSearchText(value);
-        if (user?.role !== 'superadmin') return;
+        if (role !== 'superadmin') return;
 
         const searchablePaths = ['/facilities', '/subscription-plans', '/facility-types'];
         const targetPath = searchablePaths.includes(location.pathname) ? location.pathname : '/facilities';
@@ -121,7 +125,7 @@ const Navbar = ({ toggleSidebar }) => {
                 <Search size={18} color="var(--text-secondary)" />
                 <input
                     type="text"
-                    placeholder={user?.role === 'superadmin' ? "Search facilities, SaaS plans..." : "Search members, plans..."}
+                    placeholder={role === 'superadmin' ? "Search facilities, SaaS plans..." : "Search members, plans..."}
                     className="search-input"
                     value={searchText}
                     onChange={(e) => handleSearchChange(e.target.value)}
@@ -129,7 +133,7 @@ const Navbar = ({ toggleSidebar }) => {
             </div>
 
             <div className="action-icons">
-                {!isRestrictedFacilityUser && (
+                {hasQuickAdd && (
                     <div style={{ position: 'relative' }} ref={menuRef}>
                         <button
                             className="btn btn-primary"
@@ -140,7 +144,7 @@ const Navbar = ({ toggleSidebar }) => {
                             <span>Quick Add</span>
                         </button>
 
-                        {showQuickAdd && !isRestrictedFacilityUser && (
+                        {showQuickAdd && (
                             <div className="action-menu-popup animate-fade-in" style={{
                                 position: 'absolute',
                                 top: '120%',
@@ -149,46 +153,46 @@ const Navbar = ({ toggleSidebar }) => {
                                 zIndex: 100,
                                 padding: '0.5rem'
                             }}>
-                                {user?.role !== 'superadmin' && (
-                                    <>
-                                        <button className="action-menu-item" onClick={() => handleQuickAction('/clients?action=add')}>
-                                            <User size={16} />
-                                            <span>Add Member</span>
-                                        </button>
-
-                                        {(user?.role === 'admin') && (
-                                            <>
-                                                <button className="action-menu-item" onClick={() => handleQuickAction('/staff?action=add')}>
-                                                    <UserCog size={16} />
-                                                    <span>Add Staff</span>
-                                                </button>
-                                                <button className="action-menu-item" onClick={() => handleQuickAction('/plans?action=add')}>
-                                                    <Tag size={16} />
-                                                    <span>Create Plan</span>
-                                                </button>
-                                            </>
-                                        )}
-
-                                        {(user?.role === 'admin' || user?.role === 'staff') && (
-                                            <button className="action-menu-item" onClick={() => handleQuickAction('/payments?action=add')}>
-                                                <CreditCard size={16} />
-                                                <span>Record Payment</span>
-                                            </button>
-                                        )}
-                                    </>
+                                {quick('members') && (
+                                    <button className="action-menu-item" onClick={() => handleQuickAction('/clients?action=add')}>
+                                        <User size={16} />
+                                        <span>Add Member</span>
+                                    </button>
                                 )}
 
-                                {user?.role === 'superadmin' && (
-                                    <>
-                                        <button className="action-menu-item" onClick={() => handleQuickAction('/facilities?action=add')}>
-                                            <Building2 size={16} />
-                                            <span>Register Facility</span>
-                                        </button>
-                                        <button className="action-menu-item" onClick={() => handleQuickAction('/subscription-plans?action=add')}>
-                                            <Tag size={16} />
-                                            <span>Create SaaS Plan</span>
-                                        </button>
-                                    </>
+                                {quick('staff') && (
+                                    <button className="action-menu-item" onClick={() => handleQuickAction('/staff?action=add')}>
+                                        <UserCog size={16} />
+                                        <span>Add Staff</span>
+                                    </button>
+                                )}
+
+                                {quick('plans') && (
+                                    <button className="action-menu-item" onClick={() => handleQuickAction('/plans?action=add')}>
+                                        <Tag size={16} />
+                                        <span>Create Plan</span>
+                                    </button>
+                                )}
+
+                                {quick('payments') && (
+                                    <button className="action-menu-item" onClick={() => handleQuickAction('/payments?action=add')}>
+                                        <CreditCard size={16} />
+                                        <span>Record Payment</span>
+                                    </button>
+                                )}
+
+                                {quick('facilities') && (
+                                    <button className="action-menu-item" onClick={() => handleQuickAction('/facilities?action=add')}>
+                                        <Building2 size={16} />
+                                        <span>Register Facility</span>
+                                    </button>
+                                )}
+
+                                {quick('subscriptionPlans') && (
+                                    <button className="action-menu-item" onClick={() => handleQuickAction('/subscription-plans?action=add')}>
+                                        <Tag size={16} />
+                                        <span>Create SaaS Plan</span>
+                                    </button>
                                 )}
                             </div>
                         )}

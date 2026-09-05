@@ -4,6 +4,7 @@ import { useToast } from '../context/ToastContext';
 import { Navigate } from 'react-router-dom';
 import { ArrowRight, Lock, Mail } from 'lucide-react';
 import PasswordInput from '../components/PasswordInput';
+import { homePathForRole } from '../config/roles';
 
 const Login = () => {
     const [email, setEmail] = useState('');
@@ -16,7 +17,7 @@ const Login = () => {
 
     useEffect(() => {
         if (user) {
-            window.location.href = '/';
+            window.location.href = homePathForRole(user.role);
         }
     }, [user]);
 

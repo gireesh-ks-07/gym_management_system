@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import api from '../api';
+import { isFacilityStaff } from '../config/roles';
 
 const AuthContext = createContext();
 
@@ -29,7 +30,7 @@ export const AuthProvider = ({ children }) => {
 
     const refreshFacilitySubscription = useCallback(async (nextUser = null) => {
         const effectiveUser = nextUser || user;
-        if (!effectiveUser || !['admin', 'staff'].includes(effectiveUser.role)) {
+        if (!effectiveUser || !isFacilityStaff(effectiveUser.role)) {
             setFacilitySubscription(null);
             return null;
         }

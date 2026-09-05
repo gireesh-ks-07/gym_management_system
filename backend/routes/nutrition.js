@@ -1,4 +1,5 @@
 const nutritionController = require('../controllers/nutritionController');
+const { P } = require('../config/permissions');
 
 function registerNutritionRoutes(app, deps) {
     const { authenticate, authorize, checkSubscriptionStatus } = deps;
@@ -11,10 +12,10 @@ function registerNutritionRoutes(app, deps) {
         next();
     };
 
-    const adminOnly = [authenticate, authorize(['superadmin', 'admin', 'staff']), resolveFacilityId];
+    const adminOnly = [authenticate, authorize(P.NUTRITION_MANAGE), resolveFacilityId];
     // Dieticians may also manage the food database (to build their diet charts).
-    const foodEditors = [authenticate, authorize(['superadmin', 'admin', 'staff', 'dietician']), resolveFacilityId];
-    const clientOnly = [authenticate, authorize(['client'])];
+    const foodEditors = [authenticate, authorize(P.FOOD_DB), resolveFacilityId];
+    const clientOnly = [authenticate, authorize(P.CLIENT_APP)];
 
     // ==========================================
     // ADMIN / TRAINER ROUTES

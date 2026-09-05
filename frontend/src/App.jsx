@@ -5,6 +5,7 @@ import Sidebar from './components/Sidebar';
 import Navbar from './components/Navbar';
 import { ToastProvider } from './context/ToastContext';
 import { ThemeProvider } from './context/ThemeContext';
+import { ROUTE_ROLES, homePathForRole, isFacilityBlocked } from './config/roles';
 
 // Eager-load Login (entry point, must be instant)
 import Login from './pages/Login';
@@ -31,9 +32,6 @@ const Loader = () => (
   </div>
 );
 
-// Where each role should land when it hits a route it isn't allowed on.
-// Dieticians have a restricted workspace centred on the Nutrition section.
-const homePathForRole = (role) => (role === 'dietician' ? '/nutrition' : '/');
 
 const ProtectedRoute = ({ children, roles }) => {
   const { user, loading, facilitySubscription } = useAuth();
@@ -47,13 +45,11 @@ const ProtectedRoute = ({ children, roles }) => {
     return <Navigate to={location.pathname === home ? '/login' : home} />;
   }
 
-  const isRestrictedFacilityUser =
-    ['admin', 'staff'].includes(user.role) &&
-    facilitySubscription &&
-    facilitySubscription.subscriptionStatus !== 'active';
-
-  if (isRestrictedFacilityUser && location.pathname !== '/') {
-    return <Navigate to="/" />;
+  // A lapsed subscription locks every facility role — dieticians included —
+  // out of everything but their landing page.
+  if (isFacilityBlocked(user.role, facilitySubscription)) {
+    const home = homePathForRole(user.role);
+    if (location.pathname !== home) return <Navigate to={home} />;
   }
 
   return (
@@ -87,79 +83,79 @@ const App = () => {
                 <Route path="/login" element={<Login />} />
 
                 <Route path="/" element={
-                  <ProtectedRoute roles={['admin', 'staff', 'superadmin']}>
+                  <ProtectedRoute roles={ROUTE_ROLES.dashboard}>
                     {/* Dashboard for everyone, content adapts inside */}
                     <Dashboard />
                   </ProtectedRoute>
                 } />
 
                 <Route path="/clients" element={
-                  <ProtectedRoute roles={['admin', 'staff', 'superadmin']}>
+                  <ProtectedRoute roles={ROUTE_ROLES.members}>
                     <Clients />
                   </ProtectedRoute>
                 } />
                 <Route path="/clients/:id/health" element={
-                  <ProtectedRoute roles={['admin', 'staff']}>
+                  <ProtectedRoute roles={ROUTE_ROLES.healthProfile}>
                     <HealthProfile />
                   </ProtectedRoute>
                 } />
 
                 <Route path="/facilities" element={
-                  <ProtectedRoute roles={['superadmin']}>
+                  <ProtectedRoute roles={ROUTE_ROLES.facilities}>
                     <Facilities />
                   </ProtectedRoute>
                 } />
 
                 <Route path="/subscription-plans" element={
-                  <ProtectedRoute roles={['superadmin']}>
+                  <ProtectedRoute roles={ROUTE_ROLES.subscriptionPlans}>
                     <SubscriptionPlans />
                   </ProtectedRoute>
                 } />
 
                 <Route path="/facility-types" element={
-                  <ProtectedRoute roles={['superadmin']}>
+                  <ProtectedRoute roles={ROUTE_ROLES.facilityTypes}>
                     <FacilityTypes />
                   </ProtectedRoute>
                 } />
 
                 <Route path="/plans" element={
-                  <ProtectedRoute roles={['admin']}>
+                  <ProtectedRoute roles={ROUTE_ROLES.plans}>
                     <Plans />
                   </ProtectedRoute>
                 } />
 
                 <Route path="/staff" element={
-                  <ProtectedRoute roles={['admin']}>
+                  <ProtectedRoute roles={ROUTE_ROLES.staff}>
                     <Staff />
                   </ProtectedRoute>
                 } />
 
                 <Route path="/payments" element={
-                  <ProtectedRoute roles={['admin', 'staff']}>
+                  <ProtectedRoute roles={ROUTE_ROLES.payments}>
                     <Payments />
                   </ProtectedRoute>
                 } />
 
                 <Route path="/reports" element={
-                  <ProtectedRoute roles={['admin', 'superadmin']}>
+                  <ProtectedRoute roles={ROUTE_ROLES.reports}>
                     <Reports />
                   </ProtectedRoute>
                 } />
 
                 <Route path="/gamification" element={
-                  <ProtectedRoute roles={['admin', 'superadmin']}>
+                  <ProtectedRoute roles={ROUTE_ROLES.gamification}>
                     <Gamification />
                   </ProtectedRoute>
                 } />
 
                 <Route path="/nutrition" element={
-                  <ProtectedRoute roles={['admin', 'staff', 'dietician']}>
+                  <ProtectedRoute roles={ROUTE_ROLES.nutrition}>
                     <Nutrition />
                   </ProtectedRoute>
                 } />
 
                 <Route path="/personal-training" element={
-                  <ProtectedRoute roles={['admin', 'staff']}>
+                  <ProtectedRoute roles={ROUTE_ROLES.personalTraining}>
                     <PersonalTraining />
                   </ProtectedRoute>
                 } />

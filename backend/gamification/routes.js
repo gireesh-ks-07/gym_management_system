@@ -44,7 +44,7 @@ function registerGamificationRoutes(app, deps) {
     // =====================================================================
     // CLIENT APP ROUTES  (role: client)
     // =====================================================================
-    const clientOnly = [authenticate, authorize(['client'])];
+    const clientOnly = [authenticate, authorize(P.CLIENT_APP)];
     const cBase = '/api/client/gamification';
 
     // --- Hero card summary ---
@@ -349,7 +349,7 @@ function registerGamificationRoutes(app, deps) {
     // =====================================================================
     // ADMIN PORTAL ROUTES  (role: admin / superadmin)
     // =====================================================================
-    const adminOnly = [authenticate, authorize(['admin', 'superadmin'])];
+    const adminOnly = [authenticate, authorize(P.GAMIFICATION_MANAGE)];
     const aBase = '/api/gamification';
 
     // --- Dashboard KPIs + chart data ---

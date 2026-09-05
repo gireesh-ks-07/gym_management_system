@@ -1,4 +1,5 @@
 const ptController = require('../controllers/ptController');
+const { P } = require('../config/permissions');
 
 function registerPTRoutes(app, deps) {
     const { authenticate, authorize, checkSubscriptionStatus } = deps;
@@ -12,8 +13,8 @@ function registerPTRoutes(app, deps) {
     };
 
     // Trainers are existing staff; admins and staff both manage PT sessions.
-    const staffAccess = [authenticate, checkSubscriptionStatus, authorize(['superadmin', 'admin', 'staff']), resolveFacilityId];
-    const clientOnly = [authenticate, authorize(['client'])];
+    const staffAccess = [authenticate, checkSubscriptionStatus, authorize(P.PT_MANAGE), resolveFacilityId];
+    const clientOnly = [authenticate, authorize(P.CLIENT_APP)];
 
     // ==========================================
     // ADMIN / TRAINER ROUTES
