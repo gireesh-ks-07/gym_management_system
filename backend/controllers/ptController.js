@@ -432,6 +432,7 @@ async function notifyMemberSession(session, client, status) {
         await Notification.create({
             message: messages[status] || `Your Personal Training session was updated.`,
             type: status === 'cancelled' || status === 'no_show' ? 'warning' : 'success',
+            audience: 'client',
             clientId: client.id,
             facilityId: session.facilityId,
             path: '/personal-training'

@@ -66,9 +66,14 @@ exports.assignClient = async (req, res) => {
         client.dieticianId = dieticianId;
         await client.save();
 
+        // Addressed to the dietician alone — this message is written in the
+        // second person, so a facility-wide audience would read wrong to
+        // everyone except its intended recipient.
         await Notification.create({
             message: `You have been assigned a new client: "${client.name}".`,
             type: 'info',
+            audience: 'user',
+            userId: dieticianId,
             facilityId,
             path: '/nutrition'
         });

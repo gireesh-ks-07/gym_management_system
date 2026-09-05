@@ -157,7 +157,7 @@ async function leaguesFor(facilityId) {
 // ---------------------------------------------------------------------------
 async function notifyClient(clientId, facilityId, message, type = 'success', path = '/gamification') {
     try {
-        await Notification.create({ clientId, facilityId, message, type, path });
+        await Notification.create({ audience: 'client', clientId, facilityId, message, type, path });
     } catch (_) { /* non-critical */ }
 }
 

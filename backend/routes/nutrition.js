@@ -21,7 +21,7 @@ function registerNutritionRoutes(app, deps) {
     // ==========================================
     
     // Food Database
-    app.get('/api/nutrition/foods', authenticate, nutritionController.getFoods);
+    app.get('/api/nutrition/foods', foodEditors, nutritionController.getFoods);
     app.post('/api/nutrition/foods', foodEditors, nutritionController.createFood);
     app.put('/api/nutrition/foods/:id', foodEditors, nutritionController.updateFood);
     app.delete('/api/nutrition/foods/:id', foodEditors, nutritionController.deleteFood);

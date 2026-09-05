@@ -332,7 +332,7 @@ function registerGamificationRoutes(app, deps) {
     app.get('/api/client/notifications', clientOnly, async (req, res) => {
         try {
             const notes = await Notification.findAll({
-                where: { clientId: req.user.id },
+                where: { audience: 'client', clientId: req.user.id },
                 order: [['createdAt', 'DESC']], limit: 50
             });
             res.json(notes);
@@ -341,7 +341,7 @@ function registerGamificationRoutes(app, deps) {
 
     app.post('/api/client/notifications/:id/read', clientOnly, async (req, res) => {
         try {
-            await Notification.update({ isRead: true }, { where: { id: req.params.id, clientId: req.user.id } });
+            await Notification.update({ isRead: true }, { where: { id: req.params.id, audience: 'client', clientId: req.user.id } });
             res.json({ message: 'ok' });
         } catch (err) { sendServerError(res, err, 'mark notification read'); }
     });

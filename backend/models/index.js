@@ -173,14 +173,39 @@ const Plan = sequelize.define('Plan', {
     }
 });
 
+// Who a notification is addressed to is stated explicitly by `audience`, never
+// inferred from which id columns happen to be set. Inferring it is what leaked
+// facility notifications into members' client-app feeds: every row carries a
+// facilityId, so filtering on facilityId alone matched everything.
+//
+//   audience            required ids            read by
+//   ------------------  ---------------------   -------------------------------
+//   'superadmin'        —                       superadmins only
+//   'facility'          facilityId              staff of that facility
+//   'user'              facilityId + userId     that one staff user
+//   'client'            facilityId + clientId   that one member (client app)
+const NOTIFICATION_AUDIENCES = ['superadmin', 'facility', 'user', 'client'];
+
 const Notification = sequelize.define('Notification', {
     message: { type: DataTypes.STRING, allowNull: false },
     type: { type: DataTypes.STRING, defaultValue: 'info' }, // info, warning, success, error
-    role: { type: DataTypes.STRING, allowNull: true }, // Targeted role (e.g., superadmin)
-    facilityId: { type: DataTypes.INTEGER, allowNull: true }, // Targeted facility
-    clientId: { type: DataTypes.INTEGER, allowNull: true }, // Targeted member (client app / gamification)
+    audience: {
+        type: DataTypes.ENUM(...NOTIFICATION_AUDIENCES),
+        allowNull: false,
+        defaultValue: 'facility'
+    },
+    facilityId: { type: DataTypes.INTEGER, allowNull: true },
+    userId: { type: DataTypes.INTEGER, allowNull: true },   // audience 'user'
+    clientId: { type: DataTypes.INTEGER, allowNull: true }, // audience 'client'
     isRead: { type: DataTypes.BOOLEAN, defaultValue: false },
     path: { type: DataTypes.STRING, allowNull: true } // Redirection path
+}, {
+    indexes: [
+        { fields: ['audience'] },
+        { fields: ['facilityId'] },
+        { fields: ['userId'] },
+        { fields: ['clientId'] }
+    ]
 });
 
 // AutoPay event log for tracking Razorpay subscription events
@@ -334,6 +359,7 @@ module.exports = {
     sequelize,
     User, Facility, Client, Payment, Plan, SubscriptionPlan,
     Attendance, Notification, FacilityType, FacilityAutoPayEvent,
+    NOTIFICATION_AUDIENCES,
     ...gamificationModels,
     ...nutritionModels,
     ...ptModels

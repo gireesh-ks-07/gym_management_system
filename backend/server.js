@@ -474,7 +474,7 @@ const createLimitExceededNotification = async (facility, type, limit, currentCou
 
     const existingNote = await Notification.findOne({
         where: {
-            role: 'superadmin',
+            audience: 'superadmin',
             path: '/facilities',
             createdAt: { [Op.gte]: todayStart },
             message: {
@@ -487,7 +487,7 @@ const createLimitExceededNotification = async (facility, type, limit, currentCou
         await Notification.create({
             message: `Facility "${facility.name}" exceeded ${type} limit (${currentCount}/${limit}) for its SaaS plan.`,
             type: 'warning',
-            role: 'superadmin',
+            audience: 'superadmin',
             path: '/facilities'
         });
     }
@@ -852,7 +852,7 @@ app.post('/api/subscription-plans', authenticate, authorize(['superadmin']), asy
         await Notification.create({
             message: `New SaaS Plan "${name}" has been created.`,
             type: 'info',
-            role: 'superadmin',
+            audience: 'superadmin',
             path: '/subscription-plans'
         });
 
@@ -1018,7 +1018,7 @@ app.post('/api/facilities', authenticate, authorize(['superadmin']), async (req,
         await Notification.create({
             message: `New Facility "${name}" has been registered.`,
             type: 'success',
-            role: 'superadmin',
+            audience: 'superadmin',
             path: '/facilities'
         });
 
@@ -1123,6 +1123,7 @@ app.post('/api/facilities/:id/assign-plan', authenticate, authorize(['superadmin
         await Notification.create({
             message: `Facility "${facility.name}" plan changed to "${plan.name}". Re-subscription required.`,
             type: 'warning',
+            audience: 'facility',
             facilityId: facility.id,
             path: '/'
         });
@@ -1269,7 +1270,7 @@ app.get('/api/superadmin/dashboard', authenticate, authorize(['superadmin']), as
                 await Notification.create({
                     message: `Subscription for "${facility.name}" is expiring soon (${formatDisplayDate(facility.subscriptionExpiresAt)}).`,
                     type: 'warning',
-                    role: 'superadmin',
+                    audience: 'superadmin',
                     path: '/facilities'
                 });
             }
@@ -1288,8 +1289,10 @@ app.get('/api/superadmin/dashboard', authenticate, authorize(['superadmin']), as
     }
 });
 
-// Endpoint for Facility Admin to check their own subscription
-app.get('/api/facility/subscription', authenticate, async (req, res) => {
+// Endpoint for Facility staff to check their own facility's subscription.
+// Gated: this exposes billing state and Razorpay identifiers, so it must never
+// be reachable by a member's client-app token.
+app.get('/api/facility/subscription', authenticate, authorize(['superadmin', 'admin', 'staff', 'dietician']), async (req, res) => {
     try {
         if (req.user.role === 'superadmin') {
             return res.json({
@@ -1473,7 +1476,7 @@ app.post('/api/facility/subscription/verify-autopay', authenticate, authorize(['
         await Notification.create({
             message: `AutoPay activated successfully for "${facility.name}".`,
             type: 'success',
-            role: 'superadmin',
+            audience: 'superadmin',
             path: '/facilities'
         });
 
@@ -1521,13 +1524,14 @@ app.post('/api/razorpay/webhook', async (req, res) => {
             await Notification.create({
                 message: `AutoPay issue for "${facility.name}": ${reason}. Facility is now blocked.`,
                 type: 'error',
-                role: 'superadmin',
+                audience: 'superadmin',
                 path: '/facilities'
             });
 
             await Notification.create({
                 message: `AutoPay failed/stopped (${reason}). Access is blocked until subscription is reactivated.`,
                 type: 'error',
+                audience: 'facility',
                 facilityId: facility.id,
                 path: '/'
             });
@@ -1541,7 +1545,7 @@ app.post('/api/razorpay/webhook', async (req, res) => {
             await Notification.create({
                 message: `AutoPay charge/activation successful for "${facility.name}".`,
                 type: 'success',
-                role: 'superadmin',
+                audience: 'superadmin',
                 path: '/facilities'
             });
         }
@@ -1618,6 +1622,7 @@ app.post('/api/clients', authenticate, checkSubscriptionStatus, authorize(['admi
         await Notification.create({
             message: `New member "${name}" has been registered.`,
             type: 'success',
+            audience: 'facility',
             facilityId: req.user.facilityId,
             path: '/clients'
         });
@@ -1666,6 +1671,7 @@ app.post('/api/staff', authenticate, checkSubscriptionStatus, authorize(['admin'
         await Notification.create({
             message: `New ${newRole === 'dietician' ? 'dietician' : 'staff member'} "${name}" has been added.`,
             type: 'success',
+            audience: 'facility',
             facilityId: req.user.facilityId,
             path: '/staff'
         });
@@ -3131,18 +3137,34 @@ app.delete('/api/plans/:id', authenticate, checkSubscriptionStatus, authorize(['
     }
 });
 
+// The set of notifications a given caller is allowed to see. Every notification
+// endpoint goes through this — reads and writes alike — so a row can never be
+// read or marked by someone it was not addressed to.
+const notificationScope = (user) => {
+    if (user.role === 'superadmin') {
+        return { audience: 'superadmin' };
+    }
+    if (user.role === 'client') {
+        // Members see only their own. Note they must NOT match on facilityId:
+        // every facility notification carries one, which is exactly how the
+        // facility's internal notices leaked into the member app.
+        return { audience: 'client', clientId: user.id };
+    }
+    // Facility staff (admin / staff / dietician): facility-wide notices, plus
+    // anything addressed to them personally.
+    return {
+        facilityId: user.facilityId,
+        [Op.or]: [
+            { audience: 'facility' },
+            { audience: 'user', userId: user.id }
+        ]
+    };
+};
+
 app.get('/api/notifications', authenticate, async (req, res) => {
     try {
-        const { role, facilityId } = req.user;
-        const where = {};
-        if (role === 'superadmin') {
-            where.role = 'superadmin';
-        } else {
-            where.facilityId = facilityId;
-        }
-
         const notifications = await Notification.findAll({
-            where,
+            where: notificationScope(req.user),
             order: [['createdAt', 'DESC']],
             limit: 20
         });
@@ -3154,11 +3176,13 @@ app.get('/api/notifications', authenticate, async (req, res) => {
 
 app.post('/api/notifications/mark-read/:id', authenticate, async (req, res) => {
     try {
-        const notification = await Notification.findByPk(req.params.id);
-        if (notification) {
-            notification.isRead = true;
-            await notification.save();
-        }
+        // Scoped update, not findByPk — otherwise any authenticated caller can
+        // mark any notification in the system read.
+        const [updated] = await Notification.update(
+            { isRead: true },
+            { where: { id: req.params.id, ...notificationScope(req.user) } }
+        );
+        if (!updated) return res.status(404).json({ message: 'Notification not found' });
         res.json({ success: true });
     } catch (error) {
         sendServerError(res, error);
@@ -3167,15 +3191,7 @@ app.post('/api/notifications/mark-read/:id', authenticate, async (req, res) => {
 
 app.post('/api/notifications/mark-all-read', authenticate, async (req, res) => {
     try {
-        const { role, facilityId } = req.user;
-        const where = {};
-        if (role === 'superadmin') {
-            where.role = 'superadmin';
-        } else {
-            where.facilityId = facilityId;
-        }
-
-        await Notification.update({ isRead: true }, { where });
+        await Notification.update({ isRead: true }, { where: notificationScope(req.user) });
         res.json({ success: true });
     } catch (error) {
         sendServerError(res, error);
@@ -3234,13 +3250,13 @@ cron.schedule('0 0 * * *', async () => {
         });
         for (const facility of expiringFacilities) {
             const existing = await Notification.findOne({
-                where: { role: 'superadmin', message: { [Op.like]: `%${facility.name}%expiring%` }, createdAt: { [Op.gte]: new Date(now - 24 * 60 * 60 * 1000) } }
+                where: { audience: 'superadmin', message: { [Op.like]: `%${facility.name}%expiring%` }, createdAt: { [Op.gte]: new Date(now - 24 * 60 * 60 * 1000) } }
             });
             if (!existing) {
                 await Notification.create({
                     message: `Facility "${facility.name}" subscription expiring on ${facility.subscriptionExpiresAt}.`,
                     type: 'warning',
-                    role: 'superadmin',
+                    audience: 'superadmin',
                     path: '/facilities'
                 });
             }
@@ -3316,9 +3332,9 @@ sequelize.sync({ alter: !isProduction }).then(async () => {
     const noteCount = await Notification.count();
     if (noteCount === 0) {
         await Notification.bulkCreate([
-            { message: 'New facility "Power House" has registered on the platform.', type: 'success', role: 'superadmin', path: '/facilities' },
-            { message: 'Facility "Elite Fitness" subscription is expiring within 7 days.', type: 'warning', role: 'superadmin', path: '/facilities' },
-            { message: 'Your monthly revenue report for February is now available.', type: 'info', role: 'superadmin', path: '/reports' }
+            { message: 'New facility "Power House" has registered on the platform.', type: 'success', audience: 'superadmin', path: '/facilities' },
+            { message: 'Facility "Elite Fitness" subscription is expiring within 7 days.', type: 'warning', audience: 'superadmin', path: '/facilities' },
+            { message: 'Your monthly revenue report for February is now available.', type: 'info', audience: 'superadmin', path: '/reports' }
         ]);
         console.log('Initial notifications seeded.');
     }
