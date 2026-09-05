@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { clearAllDrafts } from './utils/dietChartDrafts';
 
 const envBaseUrl = import.meta.env.VITE_API_BASE_URL;
 const baseURL = envBaseUrl || 'https://facilityapis.mobilemonks.in';
@@ -38,6 +39,7 @@ api.interceptors.response.use(
         if (status === 401 && !isLoginRequest) {
             localStorage.removeItem('token');
             localStorage.removeItem('user');
+            clearAllDrafts();
             if (!window.location.pathname.startsWith('/login')) {
                 window.location.href = '/login';
             }

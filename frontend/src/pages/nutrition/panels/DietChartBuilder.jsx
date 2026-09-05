@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useToast } from '../../../context/ToastContext';
 import { dieticianApi } from '../../../api/dietician';
+import { readDraft, writeDraft, clearDraft } from '../../../utils/dietChartDrafts';
 import { nutritionApi } from '../../../api/nutrition';
 import {
     ArrowLeft, Save, ChevronDown, Plus, Trash2, Lock, Utensils,
@@ -347,40 +348,6 @@ const mergeHealthIntoData = (data, hs) => {
     d.bodyComposition = [...(d.bodyComposition || []), ...bc];
 
     return d;
-};
-
-// ── Local draft recovery ─────────────────────────────────────────────────────
-// The dirty-state guard catches a deliberate Back, but not a closed tab, a
-// crashed browser or a flat battery — and these charts take a long sitting to
-// fill. Each edit is mirrored to localStorage under the chart's id; on next
-// open the dietician is offered the newer copy. Cleared on a successful save.
-//
-// Per-browser only: it is a recovery aid, not storage. The server stays the
-// source of truth.
-const DRAFT_PREFIX = 'dietchart:draft:';
-const DRAFT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-
-const readDraft = (chartId) => {
-    try {
-        const raw = localStorage.getItem(DRAFT_PREFIX + chartId);
-        if (!raw) return null;
-        const parsed = JSON.parse(raw);
-        if (!parsed?.savedAt || Date.now() - parsed.savedAt > DRAFT_MAX_AGE_MS) {
-            localStorage.removeItem(DRAFT_PREFIX + chartId);
-            return null;
-        }
-        return parsed;
-    } catch { return null; }
-};
-
-const writeDraft = (chartId, form) => {
-    try {
-        localStorage.setItem(DRAFT_PREFIX + chartId, JSON.stringify({ savedAt: Date.now(), form }));
-    } catch { /* quota or private mode — recovery is best-effort */ }
-};
-
-const clearDraft = (chartId) => {
-    try { localStorage.removeItem(DRAFT_PREFIX + chartId); } catch { /* ignore */ }
 };
 
 // ── Main builder ─────────────────────────────────────────────────────────────

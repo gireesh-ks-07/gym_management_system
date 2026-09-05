@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import api from '../api';
 import { isFacilityStaff } from '../config/roles';
+import { clearAllDrafts } from '../utils/dietChartDrafts';
 
 const AuthContext = createContext();
 
@@ -87,6 +88,9 @@ export const AuthProvider = ({ children }) => {
     const logout = () => {
         localStorage.removeItem('token');
         localStorage.removeItem('user');
+        // Recovery drafts hold members' medical assessments. Signing out on a
+        // shared front-desk machine must not leave them behind.
+        clearAllDrafts();
         setUser(null);
         setFacilitySubscription(null);
     };

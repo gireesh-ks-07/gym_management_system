@@ -94,6 +94,20 @@ app.use((req, res, next) => {
     next();
 });
 
+// Liveness/readiness probe for the platform. Public and cheap by design — a
+// load balancer should not need credentials, and should not hit the database on
+// every probe. `?db=1` opts into a connectivity check for a readiness probe.
+app.get('/api/health', async (req, res) => {
+    if (req.query.db !== '1') return res.json({ status: 'ok' });
+    try {
+        await sequelize.authenticate();
+        res.json({ status: 'ok', database: 'ok' });
+    } catch (err) {
+        console.error('[health] database unreachable:', err?.message || err);
+        res.status(503).json({ status: 'degraded', database: 'unreachable' });
+    }
+});
+
 // Middleware for auth
 const authenticate = (req, res, next) => {
     const authHeader = req.headers['authorization'];
@@ -843,19 +857,37 @@ app.post('/api/auth/client/login', authLimiter, async (req, res) => {
         if (!password) return res.status(400).json({ message: 'Password is required' });
         if (!email && !phone) return res.status(400).json({ message: 'Email or phone is required' });
         
-        let client;
-        if (email) {
-            client = await Client.findOne({ where: { email } });
-        } else {
-            client = await Client.findOne({ where: { phone } });
-        }
+        // A phone number is unique within a facility but not across the
+        // platform — the same person can be a member at two gyms. findOne would
+        // silently return whichever row came first, so the second member could
+        // never reach their own account. Match against all candidates instead
+        // and let the password decide.
+        const candidates = await Client.findAll({
+            where: email ? { email } : { phone },
+            limit: 10
+        });
 
-        if (!client || !client.password) {
+        const withPassword = candidates.filter((c) => c.password);
+        if (!withPassword.length) {
             return res.status(401).json({ message: 'Invalid credentials or password not set' });
         }
 
-        const isValid = await bcrypt.compare(password, client.password);
-        if (!isValid) return res.status(401).json({ message: 'Invalid credentials' });
+        const matches = [];
+        for (const candidate of withPassword) {
+            // eslint-disable-next-line no-await-in-loop
+            if (await bcrypt.compare(password, candidate.password)) matches.push(candidate);
+        }
+
+        if (!matches.length) return res.status(401).json({ message: 'Invalid credentials' });
+        if (matches.length > 1) {
+            // Same credentials at more than one facility. Guessing would be
+            // wrong half the time, so say so rather than pick.
+            return res.status(409).json({
+                message: 'This account exists at more than one facility. Please sign in with your email address.',
+                code: 'AMBIGUOUS_IDENTITY'
+            });
+        }
+        const client = matches[0];
 
         const token = jwt.sign({ id: client.id, role: 'client', facilityId: client.facilityId }, SECRET_KEY, { expiresIn: '7d' });
         res.json({ token, user: { id: client.id, name: client.name, email: client.email, phone: client.phone, role: 'client', facilityId: client.facilityId } });
@@ -864,20 +896,21 @@ app.post('/api/auth/client/login', authLimiter, async (req, res) => {
     }
 });
 
-app.post('/api/auth/client/set-password', async (req, res) => {
-    try {
-        const { phone, email, newPassword } = req.body;
-        const whereClause = phone ? { phone } : { email };
-        const client = await Client.findOne({ where: whereClause });
-        if (!client) return res.status(404).json({ message: 'Client not found' });
-        
-        client.password = newPassword;
-        await client.save();
-        res.json({ message: 'Password set successfully' });
-    } catch (error) {
-        sendServerError(res, error);
-    }
-});
+// REMOVED: POST /api/auth/client/set-password
+//
+// It took a phone number and a new password and wrote it — no authentication,
+// no token, no OTP, no rate limit, no password policy. Anyone who knew a
+// member's ten-digit number owned their account, and with it their health
+// profile, diet chart, attendance and payment history. Verified by exploiting
+// it against a running server.
+//
+// Nothing called it: not client_app, not mobile_app, not the admin web app.
+//
+// A real reset flow belongs on the Client.resetPasswordToken /
+// resetPasswordExpires columns, which already exist and are still unused:
+// one endpoint to issue a signed, expiring token out of band, another to
+// consume it. Both behind authLimiter, both enforcing the same minimum length
+// the staff reset uses.
 
 // --- FACILITY ROUTES (Superadmin) ---
 
@@ -905,7 +938,11 @@ app.post('/api/subscription-plans', authenticate, authorize(P.PLATFORM_MANAGE), 
     }
 });
 
-app.get('/api/subscription-plans', authenticate, async (req, res) => {
+// Superadmin only: this lists your SaaS pricing and, since plans gained a
+// `modules` map, the feature composition of every tier. It carried no role gate
+// at all, so any signed-in principal — a member on the client app included —
+// could read it.
+app.get('/api/subscription-plans', authenticate, authorize(P.PLATFORM_MANAGE), async (req, res) => {
     try {
         const plans = await SubscriptionPlan.findAll();
         res.json(plans);
@@ -959,7 +996,9 @@ app.post('/api/facility-types', authenticate, authorize(P.PLATFORM_MANAGE), asyn
     }
 });
 
-app.get('/api/facility-types', authenticate, async (req, res) => {
+// Superadmin only. Facility staff never call this — they receive their own
+// type, with its memberFormConfig, on the /api/facility/subscription payload.
+app.get('/api/facility-types', authenticate, authorize(P.PLATFORM_MANAGE), async (req, res) => {
     try {
         const types = await FacilityType.findAll();
         res.json(types);
@@ -1553,7 +1592,11 @@ app.post('/api/razorpay/webhook', async (req, res) => {
             .update(req.rawBody || '')
             .digest('hex');
 
-        if (receivedSignature !== expectedSignature) {
+        // Timing-safe: a plain !== short-circuits on the first differing byte.
+        // timingSafeEqual throws on unequal lengths, so check that first.
+        const received = Buffer.from(receivedSignature, 'utf8');
+        const expected = Buffer.from(expectedSignature, 'utf8');
+        if (received.length !== expected.length || !crypto.timingSafeEqual(received, expected)) {
             return res.status(400).json({ message: 'Invalid webhook signature' });
         }
 
@@ -1661,8 +1704,15 @@ app.post('/api/clients', authenticate, checkSubscriptionStatus, authorize(P.MEMB
         }
 
         if (clientData.planId) {
-            const plan = await Plan.findByPk(clientData.planId);
-            if (plan) {
+            // Scoped by facility: an unqualified findByPk let one facility
+            // attach another's plan, which then drove billing dates, was copied
+            // onto payment records, and — for a PT plan — handed over its
+            // session allowance.
+            const plan = await Plan.findOne({
+                where: { id: clientData.planId, facilityId: req.user.facilityId }
+            });
+            if (!plan) return res.status(400).json({ message: 'Plan not found for this facility' });
+            {
                 const expiryDate = calculateClientPlanExpiry(clientData.billingRenewalDate, plan.duration);
                 if (expiryDate) {
                     clientData.planExpiresAt = expiryDate;
@@ -1950,22 +2000,35 @@ app.post('/api/payments', authenticate, checkSubscriptionStatus, authorize(P.PAY
             return res.status(404).json({ message: 'Member not found' });
         }
 
+        // invoiceNumber is unique at the database level, so a collision surfaces
+        // as a constraint error rather than two payments sharing a number.
+        // Retry a few times before giving up — with 90,000 values per month the
+        // odds of losing three draws in a row are negligible.
         const today = new Date();
         const yearMonth = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}`;
-        const rand = Math.floor(Math.random() * 90000) + 10000;
-        const invoiceNumber = `INV-${yearMonth}-${rand}`;
+        const newInvoiceNumber = () => `INV-${yearMonth}-${Math.floor(Math.random() * 90000) + 10000}`;
 
-        const payment = await Payment.create({
-            clientId,
-            amount,
-            method,
-            date,
-            transactionId,
-            processedBy: req.user.id,
-            facilityId: req.user.facilityId,
-            invoiceNumber,
-            planId: client.planId || null
-        });
+        let payment;
+        for (let attempt = 0; attempt < 5; attempt += 1) {
+            try {
+                payment = await Payment.create({
+                    clientId,
+                    amount,
+                    method,
+                    date,
+                    transactionId,
+                    processedBy: req.user.id,
+                    facilityId: req.user.facilityId,
+                    invoiceNumber: newInvoiceNumber(),
+                    planId: client.planId || null
+                });
+                break;
+            } catch (err) {
+                const isDuplicateInvoice = err.name === 'SequelizeUniqueConstraintError'
+                    && err.errors?.some((e) => e.path === 'invoiceNumber');
+                if (!isDuplicateInvoice || attempt === 4) throw err;
+            }
+        }
 
         // Activate client and set expiry
         {
@@ -2489,8 +2552,11 @@ app.put('/api/clients/:id', authenticate, checkSubscriptionStatus, authorize(P.M
         const planChanged = oldPlanId !== client.planId;
 
         if (client.planId) {
-            const plan = await Plan.findByPk(client.planId);
-            if (plan) {
+            const plan = await Plan.findOne({
+                where: { id: client.planId, facilityId: req.user.facilityId }
+            });
+            if (!plan) return res.status(400).json({ message: 'Plan not found for this facility' });
+            {
                 const expiryDate = calculateClientPlanExpiry(client.billingRenewalDate, plan.duration);
                 if (expiryDate) {
                     client.planExpiresAt = expiryDate;
@@ -3274,8 +3340,28 @@ registerDieticianRoutes(app, { authenticate, authorize, checkSubscriptionStatus,
 // Initialize DB and Start Server
 // Global Error Handler
 app.use((err, req, res, next) => {
-    console.error('Unhandled Error:', err);
-    res.status(500).json({ message: 'Internal Server Error', error: err.message });
+    // Log everything, return nothing. This used to pass err.message back to the
+    // client, which for Sequelize means constraint names, column names and
+    // occasionally fragments of the query — undoing the sanitising that
+    // sendServerError does deliberately everywhere else.
+    console.error('[ERROR] unhandled:', req.method, req.path, err?.stack || err);
+    const body = { message: 'Internal Server Error' };
+    if (process.env.NODE_ENV !== 'production') body.error = err?.message;
+    res.status(500).json(body);
+});
+
+// A single missed `await` — in a cron job, or one of the deliberately
+// fire-and-forget gamification calls — terminates the process on Node 15+.
+// Without these handlers the only evidence is the platform restarting the
+// container. Log with the stack, then exit so it restarts cleanly rather than
+// continuing in an unknown state.
+process.on('unhandledRejection', (reason) => {
+    console.error('[FATAL] Unhandled promise rejection:', reason?.stack || reason);
+    process.exit(1);
+});
+process.on('uncaughtException', (err) => {
+    console.error('[FATAL] Uncaught exception:', err?.stack || err);
+    process.exit(1);
 });
 
 // --- SCHEDULED CRON JOBS ---

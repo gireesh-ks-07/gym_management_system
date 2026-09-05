@@ -1,4 +1,4 @@
-const { Sequelize, DataTypes } = require('sequelize');
+const { Sequelize, DataTypes, Op } = require('sequelize');
 const path = require('path');
 const bcrypt = require('bcryptjs');
 const { encrypt, decrypt } = require('../utils/encryption');
@@ -117,6 +117,9 @@ const Client = sequelize.define('Client', {
     resetPasswordToken: { type: DataTypes.STRING, allowNull: true },
     resetPasswordExpires: { type: DataTypes.DATE, allowNull: true },
     phone: { type: DataTypes.STRING, allowNull: false },
+    // Uniqueness is per facility, not global — the same person legitimately
+    // holds memberships at two different gyms. See the composite indexes below.
+
     height: { type: DataTypes.FLOAT, allowNull: true },
     weight: { type: DataTypes.FLOAT, allowNull: true },
     joiningDate: { type: DataTypes.DATEONLY, defaultValue: DataTypes.NOW },
@@ -136,6 +139,21 @@ const Client = sequelize.define('Client', {
     // Dietician assigned to this member (nullable). Set by admins; scopes which
     // clients a dietician can see and create diet charts for.
     dieticianId: { type: DataTypes.INTEGER, allowNull: true }
+}, {
+    indexes: [
+        // Without these, two members in one facility could share a phone number,
+        // and member login — which looks a client up by phone alone — would
+        // silently resolve to whichever row came first, locking the other out of
+        // their own account.
+        { name: 'clients_facility_phone', unique: true, fields: ['facilityId', 'phone'] },
+        {
+            name: 'clients_facility_email',
+            unique: true,
+            fields: ['facilityId', 'email'],
+            // Partial: email is optional, and many members share the absence of one.
+            where: { email: { [Op.ne]: null } }
+        }
+    ]
 });
 
 const Attendance = sequelize.define('Attendance', {
@@ -165,7 +183,12 @@ const Payment = sequelize.define('Payment', {
     date: { type: DataTypes.DATEONLY, defaultValue: DataTypes.NOW },
     transactionId: { type: DataTypes.STRING, allowNull: true }, // Captured for UPI
     paymentId: { type: DataTypes.STRING, allowNull: true },     // Razorpay payment ID
-    invoiceNumber: { type: DataTypes.STRING, allowNull: true }, // Auto-generated invoice number
+    // Unique: the generator draws 5 random digits inside a month, a space of
+    // 90,000, so by the birthday bound collisions become likely in the low
+    // hundreds of invoices per month. Duplicate invoice numbers are an
+    // accounting problem, and the constraint turns a silent duplicate into a
+    // loud failure the caller retries.
+    invoiceNumber: { type: DataTypes.STRING, allowNull: true, unique: true },
     planId: { type: DataTypes.INTEGER, allowNull: true }        // Plan at time of payment
 });
 
