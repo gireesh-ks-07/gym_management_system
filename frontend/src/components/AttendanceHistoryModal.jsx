@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import Modal from './Modal';
 import api from '../api';
-import { ChevronLeft, ChevronRight, Check } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Check, Dumbbell } from 'lucide-react';
 
 const AttendanceHistoryModal = ({ isOpen, onClose, clientId, clientName }) => {
     const [history, setHistory] = useState([]);
@@ -49,22 +49,33 @@ const AttendanceHistoryModal = ({ isOpen, onClose, clientId, clientName }) => {
             days.push(<div key={`empty-${i}`} className="calendar-day empty"></div>);
         }
 
-        // Create a map of present dates for quick lookup
-        const presentDates = new Set(
-            history
-                .filter(record => record.status === 'present')
-                .map(record => new Date(record.date).toDateString())
-        );
+        // Present dates, and which of them came from a completed PT session
+        // rather than a front-desk check-in.
+        const presentDates = new Set();
+        const ptDates = new Set();
+        history
+            .filter(record => record.status === 'present')
+            .forEach(record => {
+                const key = new Date(record.date).toDateString();
+                presentDates.add(key);
+                if (record.source === 'pt_session') ptDates.add(key);
+            });
 
         for (let day = 1; day <= daysInMonth; day++) {
             const date = new Date(year, month, day);
-            const isPresent = presentDates.has(date.toDateString());
-            const isToday = date.toDateString() === new Date().toDateString();
+            const key = date.toDateString();
+            const isPresent = presentDates.has(key);
+            const isPT = ptDates.has(key);
+            const isToday = key === new Date().toDateString();
 
             days.push(
-                <div key={day} className={`calendar-day ${isPresent ? 'present' : ''} ${isToday ? 'today' : ''}`}>
+                <div key={day}
+                    title={isPT ? 'Present — logged by a Personal Training session' : (isPresent ? 'Present' : '')}
+                    className={`calendar-day ${isPresent ? 'present' : ''} ${isToday ? 'today' : ''}`}>
                     <span className="day-number">{day}</span>
-                    {isPresent && <Check size={14} className="attendance-tick" />}
+                    {isPresent && (isPT
+                        ? <Dumbbell size={14} className="attendance-tick" />
+                        : <Check size={14} className="attendance-tick" />)}
                 </div>
             );
         }
@@ -115,6 +126,12 @@ const AttendanceHistoryModal = ({ isOpen, onClose, clientId, clientName }) => {
                             <Check size={12} />
                         </div>
                         <span>Present</span>
+                    </div>
+                    <div className="legend-item">
+                        <div className="legend-box present">
+                            <Dumbbell size={12} />
+                        </div>
+                        <span>PT session</span>
                     </div>
                 </div>
             </div>

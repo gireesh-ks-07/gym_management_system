@@ -14,7 +14,9 @@ function registerPTRoutes(app, deps) {
 
     // Trainers are existing staff; admins and staff both manage PT sessions.
     const staffAccess = [authenticate, checkSubscriptionStatus, authorize(P.PT_MANAGE), resolveFacilityId];
-    const clientOnly = [authenticate, authorize(P.CLIENT_APP)];
+    // Mirrors every other member-facing route: a member of a facility whose
+    // subscription has lapsed does not keep reading their PT plan.
+    const clientOnly = [authenticate, authorize(P.CLIENT_APP), checkSubscriptionStatus];
 
     // ==========================================
     // ADMIN / TRAINER ROUTES

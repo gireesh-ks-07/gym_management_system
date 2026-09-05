@@ -137,7 +137,22 @@ const Client = sequelize.define('Client', {
 const Attendance = sequelize.define('Attendance', {
     date: { type: DataTypes.DATEONLY, defaultValue: DataTypes.NOW },
     status: { type: DataTypes.ENUM('present', 'absent', 'excused'), defaultValue: 'present' },
-    checkInTime: { type: DataTypes.TIME, defaultValue: DataTypes.NOW }
+    // TIME column: DataTypes.NOW emits a full ISO timestamp, which Postgres
+    // rejects for `time` ("invalid input syntax for type time"). Every caller
+    // happened to pass an explicit value, so the broken default never fired —
+    // but any create that omitted it would have thrown.
+    checkInTime: {
+        type: DataTypes.TIME,
+        defaultValue: () => new Date().toLocaleTimeString('en-US', { hour12: false })
+    },
+    // How this row came to exist. A row raised by completing a PT session is
+    // removed again if that session is un-completed or deleted; a row someone
+    // marked at the front desk never is.
+    source: {
+        type: DataTypes.ENUM('manual', 'pt_session'),
+        allowNull: false,
+        defaultValue: 'manual'
+    }
 });
 
 const Payment = sequelize.define('Payment', {
