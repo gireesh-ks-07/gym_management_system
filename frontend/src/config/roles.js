@@ -54,8 +54,16 @@ export const isFacilityStaff = (role) => FACILITY_STAFF.includes(role);
 export const homePathForRole = (role) => (role === DIETICIAN ? '/nutrition' : '/');
 
 /**
+ * Deleting a member's diet chart is not a front-desk action — mirrors the
+ * backend CHART_DELETE capability. Staff keep read and health-section edit
+ * access, so the list stays fully usable for them.
+ */
+export const canDeleteDietChart = (role) =>
+    [SUPERADMIN, ADMIN, DIETICIAN].includes(role);
+
+/**
  * A facility whose subscription has lapsed locks its staff out of everything
- * except the dashboard. Applies to every facility role — a dietician of a
+ * except their landing page. Applies to every facility role — a dietician of a
  * suspended gym must see the same block screen as its admin, rather than a
  * working UI that returns 403 on the first click.
  */

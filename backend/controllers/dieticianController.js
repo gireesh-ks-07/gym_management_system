@@ -1,21 +1,25 @@
 const { User, Client, DietChart, Notification } = require('../models');
 const { Op } = require('sequelize');
+const { isUnscoped } = require('../config/permissions');
 
 // Diet-plan sections that only a dietician may author. On an admin edit these
 // keys are stripped from the incoming payload before merging, so admins can
 // maintain the health-assessment portions without touching the meal plan.
 const DIETICIAN_ONLY_KEYS = ['mealPlan', 'mealSpec', 'guidelines', 'nutritionGoals'];
 
-// "Admin-like" roles are unscoped (see the whole facility) and may edit the
-// health-assessment sections of a chart, but never the diet-plan sections.
-// Dietician management (assigning clients) remains admin/superadmin only, gated
-// at the route layer.
-const isAdminRole = (role) => role === 'admin' || role === 'superadmin' || role === 'staff';
+// Roles that see the whole facility rather than only their assigned members.
+// They may edit the health-assessment sections of a chart, but never the
+// diet-plan sections — those stay with the authoring dietician.
+//
+// This is deliberately *only* about scoping. It used to double as the check for
+// destructive authority, which is how a front-desk staff member ended up able
+// to delete any member's diet chart. Who may delete is now decided by the
+// CHART_DELETE capability at the route layer, which excludes staff.
 
 // Return the id list of clients a dietician is allowed to act on. Admins are
 // not scoped (returns null → "no restriction").
 const scopedClientIds = async (req) => {
-    if (isAdminRole(req.user.role)) return null;
+    if (isUnscoped(req.user.role)) return null;
     const clients = await Client.findAll({
         where: { facilityId: req.user.facilityId, dieticianId: req.user.id },
         attributes: ['id']
@@ -105,7 +109,7 @@ exports.getClients = async (req, res) => {
     try {
         const facilityId = req.user.facilityId;
         const where = { facilityId };
-        if (!isAdminRole(req.user.role)) where.dieticianId = req.user.id;
+        if (!isUnscoped(req.user.role)) where.dieticianId = req.user.id;
 
         const clients = await Client.findAll({
             where,
@@ -127,7 +131,7 @@ exports.getClientHealthSource = async (req, res) => {
         const clientId = parseInt(req.params.clientId, 10);
         const client = await Client.findOne({ where: { id: clientId, facilityId } });
         if (!client) return res.status(404).json({ error: 'Client not found' });
-        if (!isAdminRole(req.user.role) && client.dieticianId !== req.user.id) {
+        if (!isUnscoped(req.user.role) && client.dieticianId !== req.user.id) {
             return res.status(403).json({ error: 'Forbidden' });
         }
 
@@ -263,7 +267,7 @@ exports.updateChart = async (req, res) => {
         const chart = await DietChart.findOne({ where: { id: req.params.id, facilityId } });
         if (!chart) return res.status(404).json({ error: 'Diet chart not found' });
 
-        const admin = isAdminRole(req.user.role);
+        const admin = isUnscoped(req.user.role);
         if (!admin) {
             // Dietician must own the client this chart belongs to.
             const client = await Client.findOne({ where: { id: chart.clientId, facilityId } });
@@ -300,7 +304,7 @@ exports.deleteChart = async (req, res) => {
         const chart = await DietChart.findOne({ where: { id: req.params.id, facilityId } });
         if (!chart) return res.status(404).json({ error: 'Diet chart not found' });
 
-        if (!isAdminRole(req.user.role)) {
+        if (!isUnscoped(req.user.role)) {
             const client = await Client.findOne({ where: { id: chart.clientId, facilityId } });
             if (!client || client.dieticianId !== req.user.id) {
                 return res.status(403).json({ error: 'Forbidden' });

@@ -4,6 +4,7 @@ import { useToast } from '../../../context/ToastContext';
 import { dieticianApi } from '../../../api/dietician';
 import { Search, FileText, Trash2, Eye, User, Users, CheckCircle2, ChevronRight, Loader } from 'lucide-react';
 import DietChartBuilder from './DietChartBuilder';
+import { canDeleteDietChart } from '../../../config/roles';
 
 const GOAL_LABEL = {
     weight_loss: 'Weight Loss', weight_gain: 'Weight Gain', maintenance: 'Maintenance',
@@ -18,6 +19,7 @@ const DietChartsPanel = () => {
     const { addToast, showConfirm } = useToast();
     const facilityId = facilitySubscription?.id;
     const isDietician = user?.role === 'dietician';
+    const canDelete = canDeleteDietChart(user?.role);
 
     const [charts, setCharts] = useState([]);
     const [clients, setClients] = useState([]);
@@ -265,7 +267,9 @@ const DietChartsPanel = () => {
                                 <button className="btn btn-primary" style={{ flex: 1, justifyContent: 'center' }} onClick={() => setOpenChartId(chart.id)}>
                                     <Eye size={16} /> View
                                 </button>
-                                <button className="icon-btn" title="Delete" onClick={() => handleDelete(chart)} style={{ color: 'var(--danger)' }}><Trash2 size={16} /></button>
+                                {canDelete && (
+                                    <button className="icon-btn" title="Delete" onClick={() => handleDelete(chart)} style={{ color: 'var(--danger)' }}><Trash2 size={16} /></button>
+                                )}
                             </div>
                         </div>
                     ))}

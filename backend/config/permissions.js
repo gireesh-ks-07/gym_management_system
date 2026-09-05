@@ -84,10 +84,10 @@ const PERMISSIONS = {
     // Only a dietician authors a plan.
     CHART_AUTHOR: [DIETICIAN],
     CHART_EDIT: [SUPERADMIN, ADMIN, STAFF, DIETICIAN],
-    // NOTE: STAFF is removed from CHART_DELETE in the next commit — deleting a
-    // member's nutrition plan is not a front-desk action. Held at the current
-    // value here so this refactor is provably a no-op.
-    CHART_DELETE: [SUPERADMIN, ADMIN, STAFF, DIETICIAN],
+    // Deleting a member's nutrition plan is not a front-desk action. Staff keep
+    // read and health-section edit access (CHART_READ / CHART_EDIT) but cannot
+    // destroy a plan a dietician authored.
+    CHART_DELETE: [SUPERADMIN, ADMIN, DIETICIAN],
 
     // --- Member (client app) ---
     CLIENT_APP: [CLIENT]
