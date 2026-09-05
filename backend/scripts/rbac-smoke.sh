@@ -29,6 +29,19 @@ ADMIN=$(tok admin@demo.com)
 TRAINER=$(tok trainer@demo.com)
 DIET=$(tok dietician@demo.com)
 
+# Fail loudly on a login problem. Without this every check reports 401 and it
+# looks like fifteen broken permissions instead of one unusable token — the
+# usual cause being the login rate limiter tripped by repeated test runs
+# (in-memory: restart the API to clear it).
+for pair in "admin:$ADMIN" "trainer:$TRAINER" "dietician:$DIET"; do
+  if [ -z "${pair#*:}" ]; then
+    echo "ABORT: could not log in as ${pair%%:*}."
+    echo "  - are the demo accounts seeded, and is the API up on $API?"
+    echo "  - HTTP 429 means the login rate limiter tripped; restart the API."
+    exit 2
+  fi
+done
+
 echo "=== notifications: audience isolation ==="
 check "admin reads notifications"            200 GET /notifications "$ADMIN"
 check "dietician reads notifications"        200 GET /notifications "$DIET"
