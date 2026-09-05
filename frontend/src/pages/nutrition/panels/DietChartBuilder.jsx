@@ -47,26 +47,51 @@ const normalizeMealPlan = (rows) => {
     });
 };
 
+// ── Section registry ─────────────────────────────────────────────────────────
+// The fourteen assessment sections, in order. `filled` reports whether the
+// dietician has put anything in that section — it drives the completion dots in
+// the navigation rail and the progress meter, so the form can be picked up and
+// put down without having to open every panel to find out what is left.
+//
+// Every section here maps 1:1 to the printed assessment template. No field has
+// been added, removed or renamed.
+const anyValue = (obj) => !!obj && Object.values(obj).some((v) => v != null && String(v).trim() !== '');
+const anyRow = (rows) => Array.isArray(rows) && rows.some((r) => anyValue(r));
+
+const SECTIONS = [
+    { id: 1, label: 'Personal Information', icon: User, filled: (d) => anyValue(d.personalInfo) },
+    { id: 2, label: 'Body Composition', icon: Activity, filled: (d) => anyRow(d.bodyComposition) || !!d.bodyCompositionNotes },
+    { id: 3, label: 'Biochemical Report', icon: FlaskConical, filled: (d) => anyRow(d.biochemical) },
+    { id: 4, label: 'Medical & Family History', icon: HeartPulse, filled: (d) => anyValue(d.medicalHistory) || anyRow(d.familyHistory) },
+    { id: 5, label: 'Exercise / Activity', icon: Dumbbell, filled: (d) => anyRow(d.exerciseChart) || anyValue(d.activitySummary) },
+    { id: 6, label: 'Medication', icon: Pill, filled: (d) => anyRow(d.medications) },
+    { id: 7, label: 'Supplements', icon: Pill, filled: (d) => anyRow(d.supplements) },
+    { id: 8, label: 'Dietary Preferences', icon: Salad, filled: (d) => anyValue(d.dietaryPreferences) },
+    { id: 9, label: 'Diet Recall', icon: ClipboardList, filled: (d) => anyRow(d.dietRecall) || anyValue(d.dietRecallSummary) },
+    { id: 10, label: 'Diet Tracker', icon: CalendarCheck, filled: (d) => anyRow(d.dietTracker) },
+    { id: 11, label: 'Nutrition Goals', icon: Target, locked: true, filled: (d) => anyValue(d.nutritionGoals) },
+    { id: 12, label: 'Individualized Diet Plan', icon: Utensils, locked: true, filled: (d) => (d.mealPlan || []).some((m) => m.mealType || (m.options || []).some((o) => (o.items || []).some((it) => it.food) || o.note)) || anyValue(d.mealSpec) },
+    { id: 13, label: 'General Guidelines', icon: ListChecks, locked: true, filled: (d) => ((d.guidelines?.food || []).join('') + (d.guidelines?.lifestyle || []).join('')).trim() !== '' },
+    { id: 14, label: 'Follow-up & Monitoring', icon: LineChart, filled: (d) => anyRow(d.followUp) || !!d.dietitianRemarks || !!d.nextFollowUpDate }
+];
+
 // ── Small building blocks ────────────────────────────────────────────────────
 
-// Icon per assessment section (keyed by the leading number in the title) so we
-// don't have to annotate every <Section> call.
-const SECTION_ICONS = {
-    1: User, 2: Activity, 3: FlaskConical, 4: HeartPulse, 5: Dumbbell, 6: Pill,
-    7: Pill, 8: Salad, 9: ClipboardList, 10: CalendarCheck, 11: Target,
-    12: Utensils, 13: ListChecks, 14: LineChart
-};
-
-const Section = ({ title, subtitle, locked, defaultOpen = false, children }) => {
-    const [open, setOpen] = useState(defaultOpen);
-    const m = /^(\d+)\.\s*(.*)$/.exec(title || '');
-    const num = m ? parseInt(m[1], 10) : null;
-    const label = m ? m[2] : title;
-    const Icon = (num && SECTION_ICONS[num]) || ClipboardList;
+// A section panel. Open/closed state lives in the parent so the navigation rail
+// can jump to a section and open it, and so an error can reveal the section that
+// holds it.
+const Section = ({ id, subtitle, open, onToggle, errorCount = 0, children }) => {
+    const meta = SECTIONS.find((x) => x.id === id) || {};
+    const Icon = meta.icon || ClipboardList;
+    const hasErrors = errorCount > 0;
 
     return (
-        <div className="card" style={{ padding: 0, marginBottom: '0.9rem', overflow: 'hidden', border: '1px solid var(--border-color)' }}>
-            <button type="button" onClick={() => setOpen((o) => !o)}
+        <div id={`dcs-${id}`} className="card"
+            style={{
+                padding: 0, marginBottom: '0.9rem', overflow: 'hidden', scrollMarginTop: 96,
+                border: `1px solid ${hasErrors ? 'var(--danger)' : 'var(--border-color)'}`
+            }}>
+            <button type="button" onClick={onToggle} aria-expanded={open}
                 style={{
                     width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem',
                     padding: '0.9rem 1.1rem', background: open ? 'var(--bg-hover)' : 'transparent', border: 'none',
@@ -83,9 +108,14 @@ const Section = ({ title, subtitle, locked, defaultOpen = false, children }) => 
                     </span>
                     <div style={{ minWidth: 0 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                            {num != null && <span style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--text-muted)' }}>{String(num).padStart(2, '0')}</span>}
-                            <span style={{ fontWeight: 700, fontSize: '0.95rem' }}>{label}</span>
-                            {locked && <span className="badge badge-info" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><Lock size={10} /> Dietician only</span>}
+                            <span style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--text-muted)' }}>{String(id).padStart(2, '0')}</span>
+                            <span style={{ fontWeight: 700, fontSize: '0.95rem' }}>{meta.label}</span>
+                            {meta.locked && <span className="badge badge-info" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><Lock size={10} /> Dietician only</span>}
+                            {hasErrors && (
+                                <span className="badge badge-danger" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                                    <AlertCircle size={10} /> {errorCount}
+                                </span>
+                            )}
                         </div>
                         {subtitle && <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 1 }}>{subtitle}</div>}
                     </div>
@@ -95,6 +125,70 @@ const Section = ({ title, subtitle, locked, defaultOpen = false, children }) => 
             {open && <div style={{ padding: '1.25rem 1.1rem' }}>{children}</div>}
         </div>
     );
+};
+
+// Left-hand navigation rail: the map the form never had. One row per section
+// with a filled/empty dot and an error count, so what is done and what still
+// needs attention is answerable without opening anything.
+const SectionRail = ({ data, openIds, errorsBySection, onJump, onExpandAll, onCollapseAll }) => {
+    const done = SECTIONS.filter((sec) => sec.filled(data)).length;
+    const pct = Math.round((done / SECTIONS.length) * 100);
+
+    return (
+        <nav aria-label="Chart sections" style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+            <div className="card" style={{ padding: '0.9rem 1rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
+                    <span style={{ fontSize: '0.72rem', fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Progress</span>
+                    <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>{done} / {SECTIONS.length}</span>
+                </div>
+                <div style={{ height: 6, borderRadius: 999, background: 'var(--bg-hover)', overflow: 'hidden' }}>
+                    <div style={{ width: `${pct}%`, height: '100%', borderRadius: 999, background: 'linear-gradient(90deg, var(--primary), #34D399)', transition: 'width .25s' }} />
+                </div>
+                <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                    <button type="button" onClick={onExpandAll} style={railLinkStyle}>Expand all</button>
+                    <span style={{ color: 'var(--border-color)' }}>|</span>
+                    <button type="button" onClick={onCollapseAll} style={railLinkStyle}>Collapse all</button>
+                </div>
+            </div>
+
+            <div className="card" style={{ padding: '0.4rem' }}>
+                {SECTIONS.map((sec) => {
+                    const filled = sec.filled(data);
+                    const errs = (errorsBySection[sec.id] || []).length;
+                    const isOpen = openIds.has(sec.id);
+                    return (
+                        <button key={sec.id} type="button" onClick={() => onJump(sec.id)}
+                            style={{
+                                width: '100%', display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left',
+                                padding: '0.5rem 0.6rem', borderRadius: 8, border: 'none', cursor: 'pointer',
+                                background: isOpen ? 'var(--bg-active)' : 'transparent',
+                                color: 'var(--text-main)', font: 'inherit', fontSize: '0.83rem'
+                            }}>
+                            <span style={{
+                                width: 8, height: 8, borderRadius: 999, flexShrink: 0,
+                                background: errs ? 'var(--danger)' : (filled ? 'var(--primary)' : 'transparent'),
+                                border: errs || filled ? 'none' : '1.5px solid var(--border-color)'
+                            }} />
+                            <span style={{ color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums', fontSize: '0.75rem', flexShrink: 0 }}>
+                                {String(sec.id).padStart(2, '0')}
+                            </span>
+                            <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: isOpen ? 700 : 500 }}>
+                                {sec.label}
+                            </span>
+                            {errs > 0 && (
+                                <span style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--danger)', flexShrink: 0 }}>{errs}</span>
+                            )}
+                        </button>
+                    );
+                })}
+            </div>
+        </nav>
+    );
+};
+
+const railLinkStyle = {
+    background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+    color: 'var(--primary)', fontWeight: 600, fontSize: '0.76rem', font: 'inherit'
 };
 
 // Sized field wrapper. Fields grow to fill their row but are capped so short
@@ -124,6 +218,9 @@ const Row = ({ children }) => (
 );
 
 // Editable repeating table. `columns` = [{key,label,type,width,options}].
+// Wide tables (Diet Tracker has nine columns) scroll sideways, so a row loses
+// its identity the moment you scroll right. A row number and a sticky first
+// column keep it anchored.
 const RepeatTable = ({ columns, rows = [], onChange, disabled, addLabel = 'Add row' }) => {
     const update = (i, key, val) => {
         const next = rows.map((r, idx) => (idx === i ? { ...r, [key]: val } : r));
@@ -132,12 +229,18 @@ const RepeatTable = ({ columns, rows = [], onChange, disabled, addLabel = 'Add r
     const addRow = () => onChange([...rows, {}]);
     const removeRow = (i) => onChange(rows.filter((_, idx) => idx !== i));
 
+    const stickyCell = (isHeader) => ({
+        position: 'sticky', left: 0, zIndex: 1,
+        background: isHeader ? 'var(--bg-hover)' : 'var(--bg-card, var(--bg-body))'
+    });
+
     return (
         <div>
             <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: columns.length * 130 }}>
                     <thead>
                         <tr style={{ textAlign: 'left', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
+                            <th style={{ ...stickyCell(true), width: 34, padding: '0.4rem 0.5rem', fontWeight: 600 }}>#</th>
                             {columns.map((c) => <th key={c.key} style={{ padding: '0.4rem 0.5rem', fontWeight: 600, whiteSpace: 'nowrap' }}>{c.label}</th>)}
                             {!disabled && <th style={{ width: 36 }} />}
                         </tr>
@@ -145,6 +248,9 @@ const RepeatTable = ({ columns, rows = [], onChange, disabled, addLabel = 'Add r
                     <tbody>
                         {rows.map((r, i) => (
                             <tr key={i}>
+                                <td style={{ ...stickyCell(false), padding: '0.25rem 0.5rem', verticalAlign: 'middle', color: 'var(--text-muted)', fontSize: '0.78rem', fontVariantNumeric: 'tabular-nums' }}>
+                                    {i + 1}
+                                </td>
                                 {columns.map((c) => (
                                     <td key={c.key} style={{ padding: '0.25rem 0.35rem', verticalAlign: 'top', width: c.width }}>
                                         {c.options ? (
@@ -167,7 +273,7 @@ const RepeatTable = ({ columns, rows = [], onChange, disabled, addLabel = 'Add r
                             </tr>
                         ))}
                         {rows.length === 0 && (
-                            <tr><td colSpan={columns.length + 1} style={{ padding: '0.75rem 0.5rem', color: 'var(--text-muted)', fontSize: '0.85rem' }}>No entries.</td></tr>
+                            <tr><td colSpan={columns.length + 2} style={{ padding: '0.75rem 0.5rem', color: 'var(--text-muted)', fontSize: '0.85rem' }}>No entries.</td></tr>
                         )}
                     </tbody>
                 </table>
@@ -254,6 +360,17 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
     const [form, setForm] = useState(null);
     const [errors, setErrors] = useState([]);
     const [healthSource, setHealthSource] = useState(null);
+    // Which panels are expanded. Lives here (not inside Section) so the rail can
+    // jump to a section, and so a validation error can reveal the one holding it.
+    const [openIds, setOpenIds] = useState(() => new Set([1, 12]));
+    // Set once the dietician changes anything, so Back can warn before
+    // discarding. The form used to throw the work away silently.
+    const [dirty, setDirty] = useState(false);
+    // Which meal options are expanded, keyed "mealIndex:optionIndex". Six meals
+    // with three options each rendered ~90 inputs at once; collapsed options
+    // show a one-line summary and open on click. Option 1 of each meal starts
+    // open so the plan is never a wall of closed rows.
+    const [openOpts, setOpenOpts] = useState(() => new Set());
 
     // Health sections can be edited by admins and dieticians; plan sections
     // (goals, meal plan, meal spec, guidelines) are dietician-only.
@@ -327,9 +444,28 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
         /* eslint-disable-next-line */
     }, [chartId]);
 
-    const setTop = (key, val) => setForm((f) => ({ ...f, [key]: val }));
-    const setData = useCallback((key, val) => setForm((f) => ({ ...f, data: { ...f.data, [key]: val } })), []);
-    const setObj = (objKey, field, val) => setForm((f) => ({ ...f, data: { ...f.data, [objKey]: { ...(f.data[objKey] || {}), [field]: val } } }));
+    // Any edit clears the outstanding error list, so a fixed field's red badge
+    // doesn't linger until the next save attempt. The next Save re-validates.
+    const touch = () => { setDirty(true); setErrors((e) => (e.length ? [] : e)); };
+    const setTop = (key, val) => { touch(); setForm((f) => ({ ...f, [key]: val })); };
+    const setData = useCallback((key, val) => { touch(); setForm((f) => ({ ...f, data: { ...f.data, [key]: val } })); }, []);
+    const setObj = (objKey, field, val) => { touch(); setForm((f) => ({ ...f, data: { ...f.data, [objKey]: { ...(f.data[objKey] || {}), [field]: val } } })); };
+
+    // --- Section open/close + rail navigation ---------------------------------
+    const toggleSection = (id) => setOpenIds((prev) => {
+        const next = new Set(prev);
+        next.has(id) ? next.delete(id) : next.add(id);
+        return next;
+    });
+    const openSection = (id) => setOpenIds((prev) => new Set(prev).add(id));
+    const jumpToSection = (id) => {
+        openSection(id);
+        requestAnimationFrame(() => {
+            document.getElementById(`dcs-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+    };
+    const expandAll = () => setOpenIds(new Set(SECTIONS.map((x) => x.id)));
+    const collapseAll = () => setOpenIds(new Set());
 
     // ── Validation & cleanup ────────────────────────────────────────────────
     const isBlank = (v) => v == null || String(v).trim() === '';
@@ -338,37 +474,42 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
     const rowFilled = (r) => Object.values(r || {}).some((v) => !isBlank(v));
     const cleanRows = (rows = []) => rows.filter(rowFilled);
 
+    // Each problem carries the section that holds it, so the summary can send the
+    // dietician straight there. The messages themselves are unchanged; what is
+    // new is that they now point somewhere.
     const validate = (data) => {
         const errs = [];
-        if (isBlank(form.title)) errs.push('Chart title is required.');
+        const add = (section, message) => errs.push({ section, message });
+
+        if (isBlank(form.title)) add(1, 'Chart title is required.');
 
         // Numeric fields
         const numChecks = [
-            [data.personalInfo, [['Age', 'age'], ['Height', 'height'], ['Weight', 'weight'], ['BMI', 'bmi'], ['Waist', 'waist'], ['Hip', 'hip']]],
-            [data.nutritionGoals, [['Target weight', 'targetWeight'], ['Target body fat', 'targetBodyFat'], ['Target protein', 'targetProtein'], ['Target water', 'targetWater']]],
-            [data.mealSpec, [['Daily calories', 'calories'], ['Daily protein', 'protein'], ['Daily carbs', 'carbs'], ['Daily fat', 'fat'], ['Daily fiber', 'fiber'], ['Daily water', 'water']]]
+            [1, data.personalInfo, [['Age', 'age'], ['Height', 'height'], ['Weight', 'weight'], ['BMI', 'bmi'], ['Waist', 'waist'], ['Hip', 'hip']]],
+            [11, data.nutritionGoals, [['Target weight', 'targetWeight'], ['Target body fat', 'targetBodyFat'], ['Target protein', 'targetProtein'], ['Target water', 'targetWater']]],
+            [12, data.mealSpec, [['Daily calories', 'calories'], ['Daily protein', 'protein'], ['Daily carbs', 'carbs'], ['Daily fat', 'fat'], ['Daily fiber', 'fiber'], ['Daily water', 'water']]]
         ];
-        numChecks.forEach(([obj, fields]) => fields.forEach(([label, k]) => {
-            if (!isNum(obj?.[k])) errs.push(`${label} must be a number.`);
+        numChecks.forEach(([section, obj, fields]) => fields.forEach(([label, k]) => {
+            if (!isNum(obj?.[k])) add(section, `${label} must be a number.`);
         }));
 
         // Table rows: a filled row must have its type/category selected.
         const tableChecks = [
-            [data.bodyComposition, 'parameter', 'Body composition'],
-            [data.biochemical, 'investigation', 'Biochemical report'],
-            [data.familyHistory, 'condition', 'Family history'],
-            [data.exerciseChart, 'day', 'Exercise chart'],
-            [data.followUp, 'parameter', 'Follow-up']
+            [2, data.bodyComposition, 'parameter', 'Body composition'],
+            [3, data.biochemical, 'investigation', 'Biochemical report'],
+            [4, data.familyHistory, 'condition', 'Family history'],
+            [5, data.exerciseChart, 'day', 'Exercise chart'],
+            [14, data.followUp, 'parameter', 'Follow-up']
         ];
-        tableChecks.forEach(([rows, key, label]) => (rows || []).forEach((r, i) => {
-            if (rowFilled(r) && isBlank(r[key])) errs.push(`${label}: choose a type for row ${i + 1}.`);
+        tableChecks.forEach(([section, rows, key, label]) => (rows || []).forEach((r, i) => {
+            if (rowFilled(r) && isBlank(r[key])) add(section, `${label}: choose a type for row ${i + 1}.`);
         }));
 
         // Meal plan: a meal with any food/note content must have a meal type.
         (data.mealPlan || []).forEach((m, i) => {
             const hasContent = (m.options || []).some((o) =>
                 (o.items || []).some((it) => !isBlank(it.food) || it.calories != null || it.protein != null) || !isBlank(o.note));
-            if (hasContent && isBlank(m.mealType)) errs.push(`Meal ${i + 1}: select a meal type.`);
+            if (hasContent && isBlank(m.mealType)) add(12, `Meal ${i + 1}: select a meal type.`);
         });
 
         return errs;
@@ -395,6 +536,7 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
 
     const handleSyncHealth = () => {
         if (!healthSource) return addToast('No health-profile data found for this member.', 'info');
+        touch();
         setForm((f) => ({ ...f, data: mergeHealthIntoData(f.data, healthSource) }));
         addToast('Synced from health profile', 'success');
     };
@@ -403,8 +545,18 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
         const errs = validate(form.data);
         if (errs.length) {
             setErrors(errs);
-            addToast(errs[0], 'error');
-            window.scrollTo({ top: 0, behavior: 'smooth' });
+            // Reveal every section that has a problem, and take the dietician to
+            // the first one — rather than printing a list at the top of the page
+            // that names fields hidden inside collapsed panels.
+            setOpenIds((prev) => {
+                const next = new Set(prev);
+                errs.forEach((e) => next.add(e.section));
+                return next;
+            });
+            addToast(errs[0].message, 'error');
+            requestAnimationFrame(() => {
+                document.getElementById(`dcs-${errs[0].section}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            });
             return;
         }
         setErrors([]);
@@ -417,6 +569,7 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
                 status: form.status,
                 data: cleanData(form.data)
             });
+            setDirty(false);
             addToast('Diet chart saved', 'success');
             onBack?.();
         } catch (e) {
@@ -426,9 +579,39 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
         }
     };
 
+    // Back used to discard everything without a word.
+    const handleBack = () => {
+        if (dirty && !window.confirm('You have unsaved changes to this diet chart. Leave without saving?')) return;
+        onBack?.();
+    };
+
     if (loading || !form) {
         return <div className="loader-container" style={{ minHeight: 260 }}><div className="loader-icon" /></div>;
     }
+
+    // Errors grouped by the section that holds them — feeds both the rail's
+    // counts and each panel's own badge.
+    const errorsBySection = errors.reduce((acc, e) => {
+        (acc[e.section] = acc[e.section] || []).push(e.message);
+        return acc;
+    }, {});
+
+    const sectionProps = (id) => ({
+        open: openIds.has(id),
+        onToggle: () => toggleSection(id),
+        errorCount: (errorsBySection[id] || []).length
+    });
+
+    const filledCount = SECTIONS.filter((sec) => sec.filled(form.data)).length;
+
+    // Moving a chart to Active is what publishes it to the member, so it asks
+    // first instead of happening silently on a dropdown change.
+    const handleStatusChange = (next) => {
+        if (next === 'active' && form.status !== 'active') {
+            if (!window.confirm(`Publish this diet chart to ${clientName || 'the member'}? They will see it in their app.`)) return;
+        }
+        setTop('status', next);
+    };
 
     const pi = form.data.personalInfo;
     const mh = form.data.medicalHistory;
@@ -450,8 +633,12 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
     const removeMeal = (mi) => setMeals(mealPlan.filter((_, i) => i !== mi));
     const patchMeal = (mi, patch) => mealsUpdate(mi, (m) => ({ ...m, ...patch }));
 
-    const addOption = (mi) =>
-        mealsUpdate(mi, (m) => (optionsOf(m).length >= MAX_OPTIONS ? m : { ...m, options: [...optionsOf(m), emptyOption()] }));
+    const addOption = (mi) => {
+        const count = optionsOf(mealPlan[mi] || {}).length;
+        if (count >= MAX_OPTIONS) return;
+        setOpenOpts((prev) => new Set(prev).add(optKey(mi, count)));
+        mealsUpdate(mi, (m) => ({ ...m, options: [...optionsOf(m), emptyOption()] }));
+    };
     const removeOption = (mi, oi) => mealsUpdate(mi, (m) => ({ ...m, options: optionsOf(m).filter((_, i) => i !== oi) }));
     const patchOption = (mi, oi, patch) => optionsUpdate(mi, oi, (o) => ({ ...o, ...patch }));
 
@@ -470,6 +657,15 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
             : { food: value, foodId: undefined });
     };
 
+    const optKey = (mi, oi) => `${mi}:${oi}`;
+    const isOptOpen = (mi, oi) => oi === 0 || openOpts.has(optKey(mi, oi));
+    const toggleOpt = (mi, oi) => setOpenOpts((prev) => {
+        const next = new Set(prev);
+        const k = optKey(mi, oi);
+        next.has(k) ? next.delete(k) : next.add(k);
+        return next;
+    });
+
     const optionTotals = (o) => itemsOf(o).reduce(
         (a, it) => ({ cal: a.cal + (parseFloat(it.calories) || 0), pro: a.pro + (parseFloat(it.protein) || 0) }),
         { cal: 0, pro: 0 }
@@ -480,14 +676,19 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
             {/* Sticky header */}
             <div className="card" style={{ position: 'sticky', top: 0, zIndex: 5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', padding: '0.85rem 1.1rem', marginBottom: '1.1rem', flexWrap: 'wrap', boxShadow: '0 4px 14px rgba(0,0,0,0.06)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', minWidth: 0 }}>
-                    <button className="icon-btn" onClick={onBack} title="Back"><ArrowLeft size={18} /></button>
+                    <button className="icon-btn" onClick={handleBack} title="Back"><ArrowLeft size={18} /></button>
                     <div style={{
                         width: 42, height: 42, borderRadius: 13, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
                         background: 'linear-gradient(135deg, var(--primary), #34D399)', color: '#fff', fontWeight: 800, fontSize: '0.9rem'
                     }}>{initials(clientName)}</div>
                     <div style={{ minWidth: 0 }}>
                         <div style={{ fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{clientName}</div>
-                        <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>{readOnly ? 'View / edit health info' : 'Diet chart builder'}</div>
+                        <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                            <span>{readOnly ? 'View / edit health info' : 'Diet chart builder'}</span>
+                            <span style={{ color: 'var(--border-color)' }}>·</span>
+                            <span>{filledCount} of {SECTIONS.length} sections filled</span>
+                            {dirty && <span style={{ color: 'var(--warning, #F59E0B)', fontWeight: 600 }}>Unsaved changes</span>}
+                        </div>
                     </div>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
@@ -504,7 +705,7 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
                     )}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 0.7rem 0 0.5rem', borderRadius: 10, border: '1px solid var(--border-color)', background: 'var(--bg-body)' }}>
                         <span style={{ width: 8, height: 8, borderRadius: 999, background: STATUS_TONE[form.status] || 'var(--text-muted)', flexShrink: 0 }} />
-                        <select value={form.status} onChange={(e) => setTop('status', e.target.value)}
+                        <select value={form.status} onChange={(e) => handleStatusChange(e.target.value)}
                             style={{ border: 'none', background: 'transparent', outline: 'none', color: 'var(--text-main)', fontWeight: 600, fontSize: '0.85rem', padding: '0.5rem 0', cursor: 'pointer' }}>
                             <option value="draft">Draft</option>
                             <option value="active">Active</option>
@@ -524,17 +725,39 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
 
             {errors.length > 0 && (
                 <div style={{ background: 'var(--danger-bg)', border: '1px solid var(--danger)', borderRadius: 12, padding: '0.85rem 1rem', marginBottom: '1rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 700, fontSize: '0.85rem', color: 'var(--danger-text)', marginBottom: errors.length > 1 ? '0.4rem' : 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 700, fontSize: '0.85rem', color: 'var(--danger-text)', marginBottom: '0.4rem' }}>
                         <AlertCircle size={16} /> Please fix {errors.length} {errors.length === 1 ? 'issue' : 'issues'} before saving
                     </div>
-                    {errors.length > 1 && (
-                        <ul style={{ margin: 0, paddingLeft: '1.5rem', color: 'var(--danger-text)', fontSize: '0.82rem' }}>
-                            {errors.slice(0, 8).map((e, i) => <li key={i}>{e}</li>)}
-                        </ul>
-                    )}
+                    <ul style={{ margin: 0, paddingLeft: '1.5rem', color: 'var(--danger-text)', fontSize: '0.82rem' }}>
+                        {errors.slice(0, 8).map((e, i) => {
+                            const sec = SECTIONS.find((x) => x.id === e.section);
+                            return (
+                                <li key={i}>
+                                    <button type="button" onClick={() => jumpToSection(e.section)}
+                                        style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', font: 'inherit', color: 'inherit', textAlign: 'left', textDecoration: 'underline dotted' }}>
+                                        {e.message} <span style={{ opacity: 0.75 }}>— {String(e.section).padStart(2, '0')} {sec?.label}</span>
+                                    </button>
+                                </li>
+                            );
+                        })}
+                        {errors.length > 8 && <li>…and {errors.length - 8} more.</li>}
+                    </ul>
                 </div>
             )}
 
+            <div className="dcb-layout">
+            <aside className="dcb-rail">
+                <SectionRail
+                    data={form.data}
+                    openIds={openIds}
+                    errorsBySection={errorsBySection}
+                    onJump={jumpToSection}
+                    onExpandAll={expandAll}
+                    onCollapseAll={collapseAll}
+                />
+            </aside>
+
+            <div className="dcb-main">
             {/* Chart meta */}
             <div className="card" style={{ padding: '1.1rem 1.25rem', marginBottom: '0.9rem' }}>
                 <Row>
@@ -553,7 +776,7 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
             </div>
 
             {/* 1. Personal Information */}
-            <Section title="1. Personal Information" defaultOpen>
+            <Section id={1} {...sectionProps(1)}>
                 <Row>
                     <Field label="Name" size="lg"><input className="input-field" value={pi.name || ''} onChange={(e) => setObj('personalInfo', 'name', e.target.value)} placeholder="Full name" /></Field>
                     <Field label="Age" size="xs"><input type="number" min="0" className="input-field" value={pi.age || ''} onChange={(e) => setObj('personalInfo', 'age', e.target.value)} /></Field>
@@ -581,7 +804,7 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
             </Section>
 
             {/* 2. Body Composition */}
-            <Section title="2. Body Composition Analysis">
+            <Section id={2} {...sectionProps(2)}>
                 <RepeatTable
                     columns={[
                         { key: 'parameter', label: 'Parameter', options: PRESET.bodyComposition },
@@ -596,7 +819,7 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
             </Section>
 
             {/* 3. Biochemical */}
-            <Section title="3. Biochemical Report">
+            <Section id={3} {...sectionProps(3)}>
                 <RepeatTable
                     columns={[
                         { key: 'investigation', label: 'Investigation', options: PRESET.biochemical },
@@ -608,7 +831,7 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
             </Section>
 
             {/* 4. Medical & Family History */}
-            <Section title="4. Medical & Family History">
+            <Section id={4} {...sectionProps(4)}>
                 <Row>
                     <Field label="Present medical conditions" full><textarea className="input-field" rows="2" value={mh.present || ''} onChange={(e) => setObj('medicalHistory', 'present', e.target.value)} /></Field>
                 </Row>
@@ -639,7 +862,7 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
             </Section>
 
             {/* 5. Exercise / Physical Activity */}
-            <Section title="5. Exercise / Physical Activity">
+            <Section id={5} {...sectionProps(5)}>
                 <RepeatTable
                     columns={[
                         { key: 'day', label: 'Day', options: PRESET.days },
@@ -657,7 +880,7 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
             </Section>
 
             {/* 6. Medication */}
-            <Section title="6. Medication Details">
+            <Section id={6} {...sectionProps(6)}>
                 <RepeatTable
                     columns={[
                         { key: 'medication', label: 'Medication' },
@@ -670,7 +893,7 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
             </Section>
 
             {/* 7. Supplements */}
-            <Section title="7. Nutrition Supplements">
+            <Section id={7} {...sectionProps(7)}>
                 <RepeatTable
                     columns={[
                         { key: 'supplement', label: 'Supplement' },
@@ -684,7 +907,7 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
             </Section>
 
             {/* 8. Dietary Preferences */}
-            <Section title="8. Dietary Preferences">
+            <Section id={8} {...sectionProps(8)}>
                 <Row>
                     <Field label="Diet type">
                         <select className="input-field" value={dp.dietType || ''} onChange={(e) => setObj('dietaryPreferences', 'dietType', e.target.value)}>
@@ -705,7 +928,7 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
             </Section>
 
             {/* 9. Diet Recall */}
-            <Section title="9. Diet Recall (24-hour)">
+            <Section id={9} {...sectionProps(9)}>
                 <RepeatTable
                     columns={[
                         { key: 'time', label: 'Time' },
@@ -729,7 +952,7 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
             </Section>
 
             {/* 10. Diet Tracker */}
-            <Section title="10. Diet Tracker">
+            <Section id={10} {...sectionProps(10)}>
                 <RepeatTable
                     columns={[
                         { key: 'date', label: 'Date' },
@@ -746,7 +969,7 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
             </Section>
 
             {/* 11. Nutrition Goals (dietician only) */}
-            <Section title="11. Nutrition Goals" locked>
+            <Section id={11} {...sectionProps(11)}>
                 <Row>
                     <Field label="Primary goal" full><textarea className="input-field" rows="2" disabled={planDisabled} value={ng.primary || ''} onChange={(e) => setObj('nutritionGoals', 'primary', e.target.value)} /></Field>
                 </Row>
@@ -765,7 +988,7 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
             </Section>
 
             {/* 12. Individualized Diet Plan (dietician only) */}
-            <Section title="12. Individualized Diet Plan" subtitle="foods optional" locked defaultOpen={!readOnly}>
+            <Section id={12} subtitle="foods optional" {...sectionProps(12)}>
                 {/* Shared food suggestions — the food cell is a type-or-pick combobox. */}
                 <datalist id="dietchart-foods">
                     {foods.map((f) => (
@@ -799,17 +1022,37 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
                                             totals.cal > 0 ? `${Math.round(totals.cal)} kcal` : null,
                                             totals.pro > 0 ? `${Math.round(totals.pro)} g protein` : null
                                         ].filter(Boolean).join(' · ');
+                                        const foodNames = itemsOf(opt).map((it) => it.food).filter(Boolean);
+                                        const summary = foodNames.length
+                                            ? `${foodNames.length} food${foodNames.length === 1 ? '' : 's'} · ${foodNames.slice(0, 3).join(', ')}${foodNames.length > 3 ? '…' : ''}`
+                                            : 'Empty';
+                                        const expanded = isOptOpen(mi, oi);
                                         return (
                                             <div key={oi} style={optionCardStyle}>
-                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', gap: '0.5rem' }}>
-                                                    <span style={{ fontWeight: 700, fontSize: '0.82rem', color: 'var(--primary)' }}>Option {oi + 1}</span>
-                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: expanded ? '0.5rem' : 0, gap: '0.5rem' }}>
+                                                    <button type="button" onClick={() => oi !== 0 && toggleOpt(mi, oi)}
+                                                        style={{
+                                                            display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', padding: 0,
+                                                            cursor: oi === 0 ? 'default' : 'pointer', font: 'inherit', minWidth: 0, flex: 1, textAlign: 'left'
+                                                        }}>
+                                                        {oi !== 0 && (
+                                                            <ChevronDown size={13} style={{ color: 'var(--text-secondary)', flexShrink: 0, transform: expanded ? 'rotate(180deg)' : 'none', transition: 'transform .2s' }} />
+                                                        )}
+                                                        <span style={{ fontWeight: 700, fontSize: '0.82rem', color: 'var(--primary)', flexShrink: 0 }}>Option {oi + 1}</span>
+                                                        {!expanded && (
+                                                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                                {summary}
+                                                            </span>
+                                                        )}
+                                                    </button>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexShrink: 0 }}>
                                                         {totalLabel && <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{totalLabel}</span>}
                                                         {!planDisabled && opts.length > 1 && (
                                                             <button type="button" className="icon-btn" title="Remove option" onClick={() => removeOption(mi, oi)} style={{ color: 'var(--danger)' }}><Trash2 size={14} /></button>
                                                         )}
                                                     </div>
                                                 </div>
+                                                {expanded && <>
                                                 {itemsOf(opt).map((it, ii) => (
                                                     <div key={ii} style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.4rem', alignItems: 'center' }}>
                                                         <input className="input-field" list="dietchart-foods" style={{ ...cellInput, flex: 2, minWidth: 150 }} disabled={planDisabled} value={it.food || ''} onChange={(e) => setItemFood(mi, oi, ii, e.target.value)} placeholder="Type a food or pick (optional)" />
@@ -826,6 +1069,7 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
                                                 {(!planDisabled || opt.note) && (
                                                     <input className="input-field" style={{ ...cellInput, marginTop: '0.55rem' }} disabled={planDisabled} value={opt.note || ''} onChange={(e) => patchOption(mi, oi, { note: e.target.value })} placeholder="Note / specifications (optional)" />
                                                 )}
+                                                </>}
                                             </div>
                                         );
                                     })}
@@ -861,7 +1105,7 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
             </Section>
 
             {/* 13. General Guidelines (dietician only) */}
-            <Section title="13. General Diet Guidelines" locked>
+            <Section id={13} {...sectionProps(13)}>
                 <Row>
                     <Field label="Food guidelines (one per line)"><textarea className="input-field" rows="5" disabled={planDisabled} value={(form.data.guidelines.food || []).join('\n')} onChange={(e) => setData('guidelines', { ...form.data.guidelines, food: e.target.value.split('\n') })} /></Field>
                     <Field label="Lifestyle guidelines (one per line)"><textarea className="input-field" rows="5" disabled={planDisabled} value={(form.data.guidelines.lifestyle || []).join('\n')} onChange={(e) => setData('guidelines', { ...form.data.guidelines, lifestyle: e.target.value.split('\n') })} /></Field>
@@ -869,7 +1113,7 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
             </Section>
 
             {/* 14. Follow-up & Monitoring */}
-            <Section title="14. Follow-up & Monitoring">
+            <Section id={14} {...sectionProps(14)}>
                 <RepeatTable
                     columns={[
                         { key: 'parameter', label: 'Parameter', options: PRESET.followUp },
@@ -892,10 +1136,22 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
                     Changes are saved to <b style={{ color: 'var(--text-main)' }}>{clientName}</b>'s diet chart.
                 </span>
                 <div style={{ display: 'flex', gap: '0.75rem' }}>
-                    <button className="btn btn-secondary" onClick={onBack}>Back</button>
+                    <button className="btn btn-secondary" onClick={handleBack}>Back</button>
                     <button className="btn btn-primary" onClick={handleSave} disabled={saving}><Save size={17} /> {saving ? 'Saving…' : 'Save Diet Chart'}</button>
                 </div>
             </div>
+            </div>
+            </div>
+
+            <style>{`
+                .dcb-layout { display: grid; grid-template-columns: 244px minmax(0, 1fr); gap: 1.25rem; align-items: start; }
+                .dcb-rail { position: sticky; top: 88px; max-height: calc(100vh - 108px); overflow-y: auto; }
+                .dcb-main { min-width: 0; }
+                @media (max-width: 1024px) {
+                    .dcb-layout { grid-template-columns: minmax(0, 1fr); }
+                    .dcb-rail { position: static; max-height: none; margin-bottom: 0.5rem; }
+                }
+            `}</style>
         </div>
     );
 };

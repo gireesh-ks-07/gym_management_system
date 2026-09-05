@@ -2,9 +2,17 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "frontend",
+      "name": "api",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["server.js"],
+      "cwd": "backend",
+      "port": 3000
+    },
+    {
+      "name": "admin",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "frontend", "run", "dev"],
+      "runtimeArgs": ["run", "dev", "--", "--port", "5173"],
+      "cwd": "frontend",
       "port": 5173
     }
   ]
