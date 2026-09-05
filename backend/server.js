@@ -3369,8 +3369,29 @@ cron.schedule('1 0 * * *', async () => {
 })();
 
 const isProduction = process.env.NODE_ENV === 'production';
-// CRITICAL: Never run alter:true in production — can drop/modify columns
-sequelize.sync({ alter: !isProduction }).then(async () => {
+
+// Schema ownership
+// ----------------
+// Migrations own the schema. `npm start` runs them first (see the prestart
+// script), and migrations/20260101000000-baseline-schema.js can build the
+// database from nothing.
+//
+// sync() is a development convenience only. It used to run in production too,
+// where — without `alter` — it creates missing tables but silently never adds
+// missing columns. That is how the schema drifted away from the migration
+// history: models gained columns that production never got, and a migration
+// that had created the core tables was deleted while still recorded as run.
+//
+// Leaving it on in production would also let a new model create its table
+// without a migration, putting the two back out of step. So: off in
+// production, and DB_SYNC=false switches it off locally too when you want to
+// prove the migrations really are sufficient.
+const useSync = !isProduction && process.env.DB_SYNC !== 'false';
+if (isProduction) {
+    console.log('[db] production: schema comes from migrations (sync disabled)');
+}
+
+Promise.resolve(useSync ? sequelize.sync({ alter: true }) : sequelize.authenticate()).then(async () => {
     // Create default superadmin if not exists
     const superadmin = await User.findOne({ where: { role: 'superadmin' } });
     if (!superadmin) {

@@ -73,15 +73,9 @@ module.exports = {
       await qi.removeColumn('Notifications', 'role');
     }
 
-    // --- Indexes for the new read paths ---
-    const existingIndexes = await qi.showIndex('Notifications').catch(() => []);
-    const haveIndex = (name) => existingIndexes.some((i) => i.name === name);
-    for (const field of ['audience', 'facilityId', 'userId', 'clientId']) {
-      const name = `notifications_${field.toLowerCase()}`;
-      if (!haveIndex(name)) {
-        await qi.addIndex('Notifications', [field], { name }).catch(() => {});
-      }
-    }
+    // Indexes for the new read paths are declared on the model and created by
+    // the baseline migration. Adding them again here would leave two indexes on
+    // the same column, differing only in name.
   },
 
   async down(queryInterface, Sequelize) {

@@ -82,18 +82,38 @@ because they shipped before the registry existed.
 
 ## Database
 
-**`sequelize.sync({ alter: !isProduction })`.** In production that is `sync()`
-with no `alter`: it creates missing *tables* but never adds missing *columns* to
-existing ones. The models build the schema on a fresh database; after that,
-schema changes only land through migrations.
+**Migrations own the schema.** `npm start` runs `prestart` → `npm run migrate`
+first, so a deploy always migrates before the server boots.
+`migrations/20260101000000-baseline-schema.js` builds all 34 tables from
+nothing, so the directory alone can construct the database.
 
-⚠️ **Nothing in `package.json` runs migrations.** Add
-`npx sequelize-cli db:migrate` to the deploy step before the second release, or
-new columns will silently not exist in production.
+```bash
+npm run migrate          # apply pending migrations
+npm run migrate:status   # what has run
+npm run migrate:undo     # revert the last one
+```
 
-Migrations are idempotent — they check `describeTable` before adding — so they
-are safe against a database that `sync({ alter: true })` already touched in dev.
-Follow the existing pattern.
+`sequelize-cli` is a **runtime** dependency, not a dev one — a
+`npm ci --omit=dev` deploy still has to be able to migrate. Connection settings
+come from `config/config.js`, which reads the same environment variables as
+`models/index.js`.
+
+**`sync()` is development-only.** It used to run in production too, where —
+without `alter` — it creates missing tables but silently never adds missing
+columns. That is how the schema drifted from the migration history: models
+gained columns production never got, and the migration that created the core
+tables was deleted while still recorded as run in `SequelizeMeta`. Set
+`DB_SYNC=false` locally to prove the migrations are sufficient on their own.
+
+Every schema change needs a migration. Adding a column to a model without one
+means production never gets it.
+
+Migrations must be idempotent — check `describeTable` before adding, use
+`IF NOT EXISTS` — because dev databases were built by `sync()` and already have
+most of the schema. Follow the existing pattern.
+
+To verify a schema change end to end, build one database from migrations and
+another from `sync()` and diff `information_schema.columns`; they must match.
 
 Two model-level gotchas already fixed, worth not reintroducing:
 
@@ -148,13 +168,25 @@ bash backend/scripts/rbac-smoke.sh
 ## Local development
 
 ```bash
-cd backend  && node server.js     # :3000
-cd frontend && npm run dev        # :5173  (VITE_API_BASE_URL in .env.local)
+cd backend  && npm start          # :3000 — migrates first, then boots
+cd frontend && npm run dev        # :5173   (VITE_API_BASE_URL in .env.local)
 ```
+
+`node server.js` still works but skips migrations, so prefer `npm start`.
 
 `frontend/.env.production` points at the deployed API and is picked up by
 `npm run build`.
 
-Set `ENCRYPTION_KEY` — without it, AES-256 field encryption for member Aadhaar
-numbers is **disabled** and the server only logs a warning. Check it is present
-in the production environment.
+### Required environment
+
+| Variable | Why |
+|---|---|
+| `DATABASE_URL` *or* `DB_HOST`/`DB_NAME`/`DB_USER`/`DB_PASSWORD` | Database. A URL wins when both are present. |
+| `ENCRYPTION_KEY` | Without it AES-256 encryption of member Aadhaar numbers is **disabled** and the server only warns. |
+| `SUPERADMIN_DEFAULT_PASSWORD` | Production refuses to seed the superadmin with the well-known default. |
+| `JWT_SECRET` | Token signing. |
+| `DB_SSL_REJECT_UNAUTHORIZED=false` | Only for providers with self-signed certificates. Never as a default. |
+
+`backend/config/config.json` used to hold the database password in plain text
+and was committed. It has been replaced by `config/config.js` reading the
+environment — **the password in git history should be rotated.**

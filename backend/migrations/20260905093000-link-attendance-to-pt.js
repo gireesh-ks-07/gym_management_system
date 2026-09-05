@@ -43,13 +43,8 @@ module.exports = {
       allowNull: true
     });
 
-    if (tableNames.has('PTSessions')) {
-      const existing = await qi.showIndex('PTSessions').catch(() => []);
-      const name = 'ptsessions_attendanceid';
-      if (!existing.some((i) => i.name === name)) {
-        await qi.addIndex('PTSessions', ['attendanceId'], { name }).catch(() => {});
-      }
-    }
+    // The attendanceId index is declared on the PTSession model and created by
+    // the baseline migration; adding it here as well would duplicate it.
   },
 
   async down(queryInterface) {
