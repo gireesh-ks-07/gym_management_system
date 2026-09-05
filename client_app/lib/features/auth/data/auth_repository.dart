@@ -1,5 +1,5 @@
 import 'package:dio/dio.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import '../../../core/network/token_store.dart';
 import '../../../core/network/api_client.dart';
 
 class AuthRepository {
@@ -15,8 +15,7 @@ class AuthRepository {
       
       final token = response.data['token'];
       if (token != null) {
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('auth_token', token);
+        await TokenStore.write(token);
       }
       
       return response.data;
@@ -28,7 +27,6 @@ class AuthRepository {
   }
 
   Future<void> logout() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('auth_token');
+    await TokenStore.clear();
   }
 }

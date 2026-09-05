@@ -1,5 +1,6 @@
 import 'package:flutter/widgets.dart';
 import 'package:go_router/go_router.dart';
+import '../network/api_client.dart';
 import '../../features/splash/presentation/splash_screen.dart';
 import '../../features/auth/presentation/login_screen.dart';
 import '../../features/dashboard/presentation/dashboard_screen.dart';
@@ -38,6 +39,14 @@ GoRoute _route(String path, Widget child) => GoRoute(
       pageBuilder: (context, state) => _fade(child, state),
     );
 
+// Route an expired session back to sign-in. The API client clears the token and
+// calls this; without it a 401 surfaced as whatever error the screen happened to
+// render, leaving the member stuck on a broken page.
+void _handleSessionExpired() {
+  final context = appRouter.routerDelegate.navigatorKey.currentContext;
+  if (context != null) context.go('/login');
+}
+
 final appRouter = GoRouter(
   initialLocation: '/',
   routes: [
@@ -62,3 +71,8 @@ final appRouter = GoRouter(
     _route('/gamification/timeline', const TimelineScreen()),
   ],
 );
+
+/// Registers the session-expiry hook once, at startup.
+void wireSessionExpiry() {
+  ApiClient.onSessionExpired = _handleSessionExpired;
+}

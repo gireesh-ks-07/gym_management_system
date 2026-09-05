@@ -10,10 +10,10 @@ const crypto = require('crypto');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const cron = require('node-cron');
-const Joi = require('joi');
 const { sequelize, User, Facility, Client, Plan, Payment, SubscriptionPlan, Attendance, Notification, FacilityType, FacilityAutoPayEvent } = require('./models');
 const { Op } = require('sequelize');
 const { P, ROLES, isTrainerRole } = require('./config/permissions');
+const { S, validate } = require('./config/schemas');
 const { MODULES, isModuleEnabled, resolveModules, sanitizeModuleMap } = require('./config/modules');
 
 // --- Gamification module (engine, HTTP routes, seed data) ---
@@ -174,7 +174,27 @@ const requireModule = (moduleKey) => async (req, res, next) => {
 
 // Log the real error server-side, return a generic message to the client so
 // internal details (stack traces, DB errors) are never leaked in responses.
+// Friendly names for the unique constraints, so a duplicate becomes an
+// explanation rather than a 500. Staff re-entering a member who already exists
+// is an everyday occurrence, not an internal error.
+const UNIQUE_CONSTRAINT_MESSAGES = {
+    clients_facility_phone: 'A member with this phone number already exists at this facility.',
+    clients_facility_email: 'A member with this email address already exists at this facility.',
+    Users_email_key: 'An account with this email address already exists.',
+    SubscriptionPlans_name_key: 'A plan with this name already exists.',
+    FacilityTypes_name_key: 'A facility type with this name already exists.'
+};
+
 const sendServerError = (res, err, context = 'request') => {
+    // A constraint violation is the database reporting a business rule, not a
+    // fault. Answer 409 with something the user can act on.
+    if (err?.name === 'SequelizeUniqueConstraintError') {
+        const constraint = err.parent?.constraint || err.fields && Object.keys(err.fields).join(',');
+        const message = UNIQUE_CONSTRAINT_MESSAGES[constraint]
+            || 'That value is already in use.';
+        console.warn(`[CONFLICT] ${context}: ${constraint}`);
+        return res.status(409).json({ message, code: 'DUPLICATE', constraint });
+    }
     console.error(`[ERROR] ${context}:`, err?.message || err);
     return res.status(500).json({ message: 'Internal server error' });
 };
@@ -825,15 +845,7 @@ app.post('/api/auth/register', authenticate, authorize(P.PLATFORM_MANAGE), async
 });
 
 // Joi validation schemas
-const loginSchema = Joi.object({
-    email: Joi.string().email().required(),
-    password: Joi.string().min(1).required()
-});
-
-app.post('/api/auth/login', authLimiter, async (req, res) => {
-    const { error } = loginSchema.validate(req.body);
-    if (error) return res.status(400).json({ message: error.details[0].message });
-
+app.post('/api/auth/login', authLimiter, validate(S.login), async (req, res) => {
     try {
         const { email, password } = req.body;
         const user = await User.findOne({ where: { email } });
@@ -851,7 +863,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     }
 });
 
-app.post('/api/auth/client/login', authLimiter, async (req, res) => {
+app.post('/api/auth/client/login', authLimiter, validate(S.clientLogin), async (req, res) => {
     try {
         const { email, phone, password } = req.body;
         if (!password) return res.status(400).json({ message: 'Password is required' });
@@ -1245,7 +1257,7 @@ app.post('/api/facilities/:id/status', authenticate, authorize(P.PLATFORM_MANAGE
     }
 });
 
-app.post('/api/facilities/:id/reset-password', authenticate, authorize(P.PLATFORM_MANAGE), async (req, res) => {
+app.post('/api/facilities/:id/reset-password', authenticate, authorize(P.PLATFORM_MANAGE), validate(S.resetPassword), async (req, res) => {
     try {
         const { newPassword } = req.body;
         if (!newPassword || newPassword.length < 6) {
@@ -1656,7 +1668,7 @@ app.post('/api/razorpay/webhook', async (req, res) => {
 
 // --- CLIENT ROUTES (Admin, Staff) ---
 
-app.post('/api/clients', authenticate, checkSubscriptionStatus, authorize(P.MEMBERS_WRITE), async (req, res) => {
+app.post('/api/clients', authenticate, checkSubscriptionStatus, authorize(P.MEMBERS_WRITE), validate(S.createClient), async (req, res) => {
     try {
         const { name, email, phone, height, weight, joiningDate, billingRenewalDate, gender, aadhaar_number, address, customFields, healthProfile, workoutPlans } = req.body;
         // Ensure the staff/admin belongs to a facility
@@ -1740,7 +1752,7 @@ app.post('/api/clients', authenticate, checkSubscriptionStatus, authorize(P.MEMB
 
 // --- STAFF ROUTES (Admin) ---
 
-app.post('/api/staff', authenticate, checkSubscriptionStatus, authorize(P.STAFF_MANAGE), async (req, res) => {
+app.post('/api/staff', authenticate, checkSubscriptionStatus, authorize(P.STAFF_MANAGE), validate(S.createStaff), async (req, res) => {
     try {
         const { name, email, password, role } = req.body;
         // Admins may create general staff or dieticians.
@@ -1814,7 +1826,7 @@ const normalizePlanTypeFields = (body) => {
     };
 };
 
-app.post('/api/plans', authenticate, checkSubscriptionStatus, authorize(P.PLANS_WRITE), async (req, res) => {
+app.post('/api/plans', authenticate, checkSubscriptionStatus, authorize(P.PLANS_WRITE), validate(S.createPlan), async (req, res) => {
     try {
         const { name, price, duration, description, features } = req.body;
         const ptFields = normalizePlanTypeFields(req.body);
@@ -1832,7 +1844,7 @@ app.post('/api/plans', authenticate, checkSubscriptionStatus, authorize(P.PLANS_
     }
 });
 
-app.put('/api/plans/:id', authenticate, checkSubscriptionStatus, authorize(P.PLANS_WRITE), async (req, res) => {
+app.put('/api/plans/:id', authenticate, checkSubscriptionStatus, authorize(P.PLANS_WRITE), validate(S.createPlan), async (req, res) => {
     try {
         const { name, price, duration, description, features } = req.body;
         const plan = await Plan.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
@@ -1986,7 +1998,7 @@ app.get('/api/dashboard', authenticate, authorize(P.DASHBOARD_READ), async (req,
     }
 });
 
-app.post('/api/payments', authenticate, checkSubscriptionStatus, authorize(P.PAYMENTS_WRITE), async (req, res) => {
+app.post('/api/payments', authenticate, checkSubscriptionStatus, authorize(P.PAYMENTS_WRITE), validate(S.recordPayment), async (req, res) => {
     try {
         const { clientId, amount, method, date, transactionId } = req.body;
 
@@ -2108,10 +2120,18 @@ app.get('/api/client/me', authenticate, authorize(P.CLIENT_APP), async (req, res
             limit: 5
         });
 
+        // Which feature modules this member's facility actually has. Without it
+        // the app can only discover a missing module by calling its endpoint and
+        // getting a 402, which is a broken screen rather than a hidden tab.
+        const facility = await Facility.findByPk(client.facilityId, {
+            include: [{ model: SubscriptionPlan, attributes: ['id', 'modules'] }]
+        });
+
         res.json({
             client,
             recentAttendance,
-            recentPayments
+            recentPayments,
+            enabledModules: facility ? resolveModules(facility) : {}
         });
     } catch (error) {
         sendServerError(res, error, 'GET /api/client/me');
@@ -2509,7 +2529,7 @@ app.delete('/api/facilities/:id', authenticate, authorize(P.PLATFORM_MANAGE), as
     }
 });
 
-app.put('/api/clients/:id', authenticate, checkSubscriptionStatus, authorize(P.MEMBERS_WRITE), async (req, res) => {
+app.put('/api/clients/:id', authenticate, checkSubscriptionStatus, authorize(P.MEMBERS_WRITE), validate(S.updateClient), async (req, res) => {
     try {
         const { name, email, phone, height, weight, joiningDate, billingRenewalDate, gender, aadhaar_number, address, customFields, healthProfile, workoutPlans } = req.body;
         const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });

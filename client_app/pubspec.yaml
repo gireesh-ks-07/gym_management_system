@@ -40,6 +40,11 @@ dependencies:
   google_fonts: ^8.2.1
   lottie: ^3.5.1
   shared_preferences: ^2.5.5
+  # Auth tokens live here rather than in SharedPreferences: Keychain on iOS,
+  # Keystore-backed on Android. SharedPreferences is plain unencrypted storage,
+  # readable from a device backup or by any process on a rooted handset — and a
+  # member's token grants their health profile, diet chart and payment history.
+  flutter_secure_storage: ^9.2.2
   flutter_animate: ^4.5.2
   iconsax: ^0.0.8
   intl: ^0.20.2
