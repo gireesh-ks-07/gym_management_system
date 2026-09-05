@@ -5,9 +5,18 @@ function registerDieticianRoutes(app, deps) {
     const { authenticate, authorize, checkSubscriptionStatus } = deps;
 
     // Resolve facility ID for superadmins (mirrors nutrition/gamification).
+    // Superadmins are not bound to one facility, so they must name the facility
+    // they are acting on. Falling through with a null facilityId made the
+    // controllers query `where: { facilityId: null }` and return an empty list —
+    // a superadmin who forgot the parameter saw an empty module and concluded
+    // the data was gone.
     const resolveFacilityId = (req, res, next) => {
         if (req.user.role === 'superadmin') {
-            req.user.facilityId = req.query.facilityId || req.body?.facilityId || null;
+            const facilityId = req.query.facilityId || req.body?.facilityId || null;
+            if (!facilityId) {
+                return res.status(400).json({ message: 'facilityId is required when acting as superadmin' });
+            }
+            req.user.facilityId = facilityId;
         }
         next();
     };
