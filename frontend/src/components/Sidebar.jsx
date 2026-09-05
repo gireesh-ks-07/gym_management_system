@@ -1,15 +1,19 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { can, isFacilityBlocked } from '../config/roles';
+import { can, isFacilityBlocked, moduleAvailable } from '../config/roles';
 import { LayoutDashboard, Users, LogOut, Settings, Tag, CreditCard, BarChart2, Building2, Layers, Trophy, X, Apple, Dumbbell } from 'lucide-react';
 
 const Sidebar = ({ isOpen, onClose }) => {
     const { user, logout, facilitySubscription } = useAuth();
     const role = user?.role;
     const isRestrictedFacilityUser = isFacilityBlocked(role, facilitySubscription);
-    // A nav item shows when the role may open the route and the facility is live.
-    const show = (routeKey) => can(routeKey, role) && !isRestrictedFacilityUser;
+    // A nav item shows when the role may open the route, the facility's plan
+    // includes the module behind it, and the subscription is live.
+    const show = (routeKey) =>
+        can(routeKey, role)
+        && moduleAvailable(routeKey, facilitySubscription?.enabledModules)
+        && !isRestrictedFacilityUser;
 
     return (
         <div className={`sidebar ${isOpen ? 'open' : ''}`}>

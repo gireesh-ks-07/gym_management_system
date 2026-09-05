@@ -349,6 +349,40 @@ const mergeHealthIntoData = (data, hs) => {
     return d;
 };
 
+// ── Local draft recovery ─────────────────────────────────────────────────────
+// The dirty-state guard catches a deliberate Back, but not a closed tab, a
+// crashed browser or a flat battery — and these charts take a long sitting to
+// fill. Each edit is mirrored to localStorage under the chart's id; on next
+// open the dietician is offered the newer copy. Cleared on a successful save.
+//
+// Per-browser only: it is a recovery aid, not storage. The server stays the
+// source of truth.
+const DRAFT_PREFIX = 'dietchart:draft:';
+const DRAFT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+const readDraft = (chartId) => {
+    try {
+        const raw = localStorage.getItem(DRAFT_PREFIX + chartId);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (!parsed?.savedAt || Date.now() - parsed.savedAt > DRAFT_MAX_AGE_MS) {
+            localStorage.removeItem(DRAFT_PREFIX + chartId);
+            return null;
+        }
+        return parsed;
+    } catch { return null; }
+};
+
+const writeDraft = (chartId, form) => {
+    try {
+        localStorage.setItem(DRAFT_PREFIX + chartId, JSON.stringify({ savedAt: Date.now(), form }));
+    } catch { /* quota or private mode — recovery is best-effort */ }
+};
+
+const clearDraft = (chartId) => {
+    try { localStorage.removeItem(DRAFT_PREFIX + chartId); } catch { /* ignore */ }
+};
+
 // ── Main builder ─────────────────────────────────────────────────────────────
 const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => {
     const { addToast } = useToast();
@@ -371,6 +405,8 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
     // show a one-line summary and open on click. Option 1 of each meal starts
     // open so the plan is never a wall of closed rows.
     const [openOpts, setOpenOpts] = useState(() => new Set());
+    // A recovered local draft awaiting the dietician's decision.
+    const [draftOffer, setDraftOffer] = useState(null);
 
     // Health sections can be edited by admins and dieticians; plan sections
     // (goals, meal plan, meal spec, guidelines) are dietician-only.
@@ -427,13 +463,24 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
                     }
                 }
 
-                setForm({
+                const loaded = {
                     title: chart.title || '',
                     assessmentDate: chart.assessmentDate || '',
                     primaryGoal: chart.primaryGoal || '',
                     status: chart.status || 'draft',
                     data
-                });
+                };
+                setForm(loaded);
+
+                // Offer a local draft only when it is newer than the saved chart
+                // and actually differs — otherwise it is just noise.
+                const draft = readDraft(chartId);
+                if (draft && new Date(draft.savedAt) > new Date(chart.updatedAt || 0)
+                    && JSON.stringify(draft.form) !== JSON.stringify(loaded)) {
+                    setDraftOffer(draft);
+                } else if (draft) {
+                    clearDraft(chartId);
+                }
             } catch (e) {
                 addToast(e.response?.data?.error || 'Failed to load diet chart', 'error');
                 onBack?.();
@@ -447,6 +494,14 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
     // Any edit clears the outstanding error list, so a fixed field's red badge
     // doesn't linger until the next save attempt. The next Save re-validates.
     const touch = () => { setDirty(true); setErrors((e) => (e.length ? [] : e)); };
+
+    // Mirror the form to local storage while it is dirty, debounced so typing
+    // doesn't hit storage on every keystroke.
+    useEffect(() => {
+        if (!dirty || !form) return;
+        const t = setTimeout(() => writeDraft(chartId, form), 800);
+        return () => clearTimeout(t);
+    }, [form, dirty, chartId]);
     const setTop = (key, val) => { touch(); setForm((f) => ({ ...f, [key]: val })); };
     const setData = useCallback((key, val) => { touch(); setForm((f) => ({ ...f, data: { ...f.data, [key]: val } })); }, []);
     const setObj = (objKey, field, val) => { touch(); setForm((f) => ({ ...f, data: { ...f.data, [objKey]: { ...(f.data[objKey] || {}), [field]: val } } })); };
@@ -570,6 +625,7 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
                 data: cleanData(form.data)
             });
             setDirty(false);
+            clearDraft(chartId);
             addToast('Diet chart saved', 'success');
             onBack?.();
         } catch (e) {
@@ -582,6 +638,7 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
     // Back used to discard everything without a word.
     const handleBack = () => {
         if (dirty && !window.confirm('You have unsaved changes to this diet chart. Leave without saving?')) return;
+        clearDraft(chartId);
         onBack?.();
     };
 
@@ -715,6 +772,30 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
                     <button className="btn btn-primary" onClick={handleSave} disabled={saving}><Save size={17} /> {saving ? 'Saving…' : 'Save'}</button>
                 </div>
             </div>
+
+            {draftOffer && (
+                <div style={{
+                    display: 'flex', gap: '0.75rem', alignItems: 'flex-start', flexWrap: 'wrap',
+                    background: 'var(--bg-hover)', border: '1px solid var(--warning, #F59E0B)',
+                    borderRadius: 12, padding: '0.85rem 1rem', marginBottom: '1rem', fontSize: '0.85rem'
+                }}>
+                    <RefreshCw size={15} style={{ marginTop: 2, flexShrink: 0, color: 'var(--warning, #F59E0B)' }} />
+                    <span style={{ flex: 1, minWidth: 200, color: 'var(--text-secondary)' }}>
+                        Unsaved changes from {new Date(draftOffer.savedAt).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })} were
+                        recovered from this browser. They were never saved to the server.
+                    </span>
+                    <span style={{ display: 'flex', gap: '0.5rem' }}>
+                        <button className="btn btn-secondary" style={{ padding: '0.35rem 0.8rem', fontSize: '0.82rem' }}
+                            onClick={() => { clearDraft(chartId); setDraftOffer(null); }}>
+                            Discard
+                        </button>
+                        <button className="btn btn-primary" style={{ padding: '0.35rem 0.8rem', fontSize: '0.82rem' }}
+                            onClick={() => { setForm(draftOffer.form); setDirty(true); setDraftOffer(null); }}>
+                            Restore them
+                        </button>
+                    </span>
+                </div>
+            )}
 
             {readOnly && (
                 <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'flex-start', background: 'var(--bg-hover)', border: '1px solid var(--border-color)', borderRadius: 12, padding: '0.85rem 1rem', marginBottom: '1rem', fontSize: '0.84rem', color: 'var(--text-secondary)' }}>

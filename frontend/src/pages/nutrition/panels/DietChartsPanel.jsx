@@ -2,9 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../../context/AuthContext';
 import { useToast } from '../../../context/ToastContext';
 import { dieticianApi } from '../../../api/dietician';
-import { Search, FileText, Trash2, Eye, User, Users, CheckCircle2, ChevronRight, Loader } from 'lucide-react';
+import { Search, FileText, Trash2, Eye, User, Users, CheckCircle2, ChevronRight, Loader, Plus } from 'lucide-react';
 import DietChartBuilder from './DietChartBuilder';
-import { canDeleteDietChart } from '../../../config/roles';
+import Modal from '../../../components/Modal';
+import { canDeleteDietChart, canAuthorDietPlan } from '../../../config/roles';
 
 const GOAL_LABEL = {
     weight_loss: 'Weight Loss', weight_gain: 'Weight Gain', maintenance: 'Maintenance',
@@ -20,6 +21,7 @@ const DietChartsPanel = () => {
     const facilityId = facilitySubscription?.id;
     const isDietician = user?.role === 'dietician';
     const canDelete = canDeleteDietChart(user?.role);
+    const canAuthor = canAuthorDietPlan(user?.role);
 
     const [charts, setCharts] = useState([]);
     const [clients, setClients] = useState([]);
@@ -29,6 +31,7 @@ const DietChartsPanel = () => {
 
     const [openChartId, setOpenChartId] = useState(null); // chart open in the builder
     const [busyClientId, setBusyClientId] = useState(null);
+    const [newChart, setNewChart] = useState({ open: false, clientId: '', search: '' });
 
     const load = async () => {
         try {
@@ -92,7 +95,7 @@ const DietChartsPanel = () => {
             <DietChartBuilder
                 chartId={openChartId}
                 facilityId={facilityId}
-                readOnly={!isDietician}
+                readOnly={!canAuthor}
                 onBack={() => { setOpenChartId(null); load(); }}
             />
         );
@@ -233,6 +236,11 @@ const DietChartsPanel = () => {
                     <option value="active">Active</option>
                     <option value="archived">Archived</option>
                 </select>
+                {canAuthor && (
+                    <button className="btn btn-primary" onClick={() => setNewChart({ open: true, clientId: '', search: '' })}>
+                        <Plus size={17} /> New chart
+                    </button>
+                )}
             </div>
 
             {loading ? (
@@ -275,11 +283,54 @@ const DietChartsPanel = () => {
                     ))}
                     {filtered.length === 0 && (
                         <div style={{ gridColumn: '1 / -1', textAlign: 'center', padding: '3rem', color: 'var(--text-secondary)' }}>
-                            No diet charts yet. Dieticians create charts for the members assigned to them.
+                            {canAuthor
+                                ? 'No diet charts yet. Start one with “New chart”, or assign members to a dietician to have them build it.'
+                                : 'No diet charts yet. Dieticians create charts for the members assigned to them.'}
                         </div>
                     )}
                 </div>
             )}
+
+            {/* Admins start charts through a member picker — their client list is
+                the whole facility, not a handful of assigned members. */}
+            <Modal isOpen={newChart.open} onClose={() => setNewChart({ open: false, clientId: '', search: '' })} title="Start a Diet Chart">
+                <div className="input-group">
+                    <label className="input-label">Member</label>
+                    <input className="input-field" placeholder="Search members…" value={newChart.search}
+                        onChange={(e) => setNewChart({ ...newChart, search: e.target.value })} />
+                </div>
+                <div style={{ maxHeight: 280, overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: 10 }}>
+                    {clients
+                        .filter((c) => (c.name || '').toLowerCase().includes(newChart.search.toLowerCase()) || (c.phone || '').includes(newChart.search))
+                        .slice(0, 100)
+                        .map((c) => {
+                            const existing = latestChartByClient[c.id];
+                            return (
+                                <button key={c.id} type="button" disabled={busyClientId === c.id}
+                                    onClick={() => { setNewChart({ open: false, clientId: '', search: '' }); openForClient(c); }}
+                                    style={{
+                                        width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+                                        padding: '0.65rem 0.85rem', background: 'transparent', border: 'none',
+                                        borderBottom: '1px solid var(--border-color)', cursor: 'pointer', font: 'inherit',
+                                        color: 'var(--text-main)', textAlign: 'left'
+                                    }}>
+                                    <span style={{ minWidth: 0 }}>
+                                        <span style={{ fontWeight: 600, display: 'block' }}>{c.name}</span>
+                                        <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                                            {c.phone || '—'}{c.dietician ? ` · ${c.dietician.name}` : ''}
+                                        </span>
+                                    </span>
+                                    <span style={{ fontSize: '0.78rem', color: 'var(--primary)', fontWeight: 600, flexShrink: 0 }}>
+                                        {existing ? 'Open existing' : 'Create'}
+                                    </span>
+                                </button>
+                            );
+                        })}
+                    {clients.length === 0 && (
+                        <div style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>No members found.</div>
+                    )}
+                </div>
+            </Modal>
         </div>
     );
 };

@@ -5,7 +5,7 @@ import Sidebar from './components/Sidebar';
 import Navbar from './components/Navbar';
 import { ToastProvider } from './context/ToastContext';
 import { ThemeProvider } from './context/ThemeContext';
-import { ROUTE_ROLES, homePathForRole, isFacilityBlocked } from './config/roles';
+import { ROUTE_ROLES, homePathForRole, isFacilityBlocked, moduleAvailable } from './config/roles';
 
 // Eager-load Login (entry point, must be instant)
 import Login from './pages/Login';
@@ -33,7 +33,7 @@ const Loader = () => (
 );
 
 
-const ProtectedRoute = ({ children, roles }) => {
+const ProtectedRoute = ({ children, roles, routeKey }) => {
   const { user, loading, facilitySubscription } = useAuth();
   const [isSidebarOpen, setIsSidebarOpen] = React.useState(false);
   const location = useLocation();
@@ -43,6 +43,11 @@ const ProtectedRoute = ({ children, roles }) => {
   if (roles && !roles.includes(user.role)) {
     const home = homePathForRole(user.role);
     return <Navigate to={location.pathname === home ? '/login' : home} />;
+  }
+
+  // A module the facility's plan doesn't include is not reachable by URL either.
+  if (routeKey && !moduleAvailable(routeKey, facilitySubscription?.enabledModules)) {
+    return <Navigate to={homePathForRole(user.role)} />;
   }
 
   // A lapsed subscription locks every facility role — dieticians included —
@@ -143,19 +148,19 @@ const App = () => {
                 } />
 
                 <Route path="/gamification" element={
-                  <ProtectedRoute roles={ROUTE_ROLES.gamification}>
+                  <ProtectedRoute roles={ROUTE_ROLES.gamification} routeKey="gamification">
                     <Gamification />
                   </ProtectedRoute>
                 } />
 
                 <Route path="/nutrition" element={
-                  <ProtectedRoute roles={ROUTE_ROLES.nutrition}>
+                  <ProtectedRoute roles={ROUTE_ROLES.nutrition} routeKey="nutrition">
                     <Nutrition />
                   </ProtectedRoute>
                 } />
 
                 <Route path="/personal-training" element={
-                  <ProtectedRoute roles={ROUTE_ROLES.personalTraining}>
+                  <ProtectedRoute roles={ROUTE_ROLES.personalTraining} routeKey="personalTraining">
                     <PersonalTraining />
                   </ProtectedRoute>
                 } />

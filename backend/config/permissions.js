@@ -82,8 +82,11 @@ const PERMISSIONS = {
     // --- Dieticians & diet charts ---
     DIETICIAN_MANAGE: [SUPERADMIN, ADMIN],
     CHART_READ: [SUPERADMIN, ADMIN, STAFF, DIETICIAN],
-    // Only a dietician authors a plan.
-    CHART_AUTHOR: [DIETICIAN],
+    // Dieticians author plans. Admins are included because a facility may not
+    // employ one — a small gym's owner does everything — and an admin who can
+    // delete a chart but not create one is an asymmetry with no rationale.
+    // Staff are not: front-desk is not a clinical role.
+    CHART_AUTHOR: [SUPERADMIN, ADMIN, DIETICIAN],
     CHART_EDIT: [SUPERADMIN, ADMIN, STAFF, DIETICIAN],
     // Deleting a member's nutrition plan is not a front-desk action. Staff keep
     // read and health-section edit access (CHART_READ / CHART_EDIT) but cannot
@@ -111,6 +114,15 @@ const isFacilityStaff = (role) => FACILITY_STAFF.includes(role);
 /** May this user be assigned as the trainer on a PT session? */
 const isTrainerRole = (role) => PERMISSIONS.PT_TRAINER.includes(role);
 
+/**
+ * May this role author the diet-plan sections of a chart (goals, meal plan,
+ * specifications, guidelines)?
+ *
+ * Separate from "may see the whole facility". Staff are unscoped but are not a
+ * clinical role, so they maintain the health-assessment sections only.
+ */
+const canAuthorPlan = (role) => PERMISSIONS.CHART_AUTHOR.includes(role);
+
 const can = (capability, role) => (PERMISSIONS[capability] || []).includes(role);
 
 module.exports = {
@@ -121,5 +133,6 @@ module.exports = {
     isUnscoped,
     isFacilityStaff,
     isTrainerRole,
+    canAuthorPlan,
     can
 };

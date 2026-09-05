@@ -30,7 +30,7 @@ const {
 } = models;
 
 function registerGamificationRoutes(app, deps) {
-    const { authenticate, authorize, checkSubscriptionStatus, sendServerError } = deps;
+    const { authenticate, authorize, checkSubscriptionStatus, requireModule, sendServerError } = deps;
 
     // Resolve the facility a request operates on. Admin/staff are locked to their
     // own facility; superadmin may target one via query/body.
@@ -45,7 +45,7 @@ function registerGamificationRoutes(app, deps) {
     // =====================================================================
     // CLIENT APP ROUTES  (role: client)
     // =====================================================================
-    const clientOnly = [authenticate, authorize(P.CLIENT_APP)];
+    const clientOnly = [authenticate, authorize(P.CLIENT_APP), requireModule('gamification')];
     const cBase = '/api/client/gamification';
 
     // --- Hero card summary ---
@@ -350,7 +350,7 @@ function registerGamificationRoutes(app, deps) {
     // =====================================================================
     // ADMIN PORTAL ROUTES  (role: admin / superadmin)
     // =====================================================================
-    const adminOnly = [authenticate, authorize(P.GAMIFICATION_MANAGE)];
+    const adminOnly = [authenticate, requireModule('gamification'), authorize(P.GAMIFICATION_MANAGE)];
     const aBase = '/api/gamification';
 
     // --- Dashboard KPIs + chart data ---

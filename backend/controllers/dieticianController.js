@@ -1,6 +1,6 @@
 const { User, Client, DietChart, Notification } = require('../models');
 const { Op } = require('sequelize');
-const { isUnscoped } = require('../config/permissions');
+const { isUnscoped, canAuthorPlan } = require('../config/permissions');
 
 // Diet-plan sections that only a dietician may author. On an admin edit these
 // keys are stripped from the incoming payload before merging, so admins can
@@ -268,14 +268,17 @@ exports.createChart = async (req, res) => {
 
         const client = await Client.findOne({ where: { id: clientId, facilityId } });
         if (!client) return res.status(404).json({ error: 'Client not found' });
-        if (client.dieticianId !== req.user.id) {
+        // A dietician may only author for their own assigned members. Admins are
+        // unscoped, and the chart is attributed to the member's assigned
+        // dietician (if any) rather than to the admin who opened it.
+        if (!isUnscoped(req.user.role) && client.dieticianId !== req.user.id) {
             return res.status(403).json({ error: 'This client is not assigned to you' });
         }
 
         const chart = await DietChart.create({
             facilityId,
             clientId,
-            dieticianId: req.user.id,
+            dieticianId: isUnscoped(req.user.role) ? (client.dieticianId || null) : req.user.id,
             title: title || null,
             assessmentDate: assessmentDate || null,
             primaryGoal: primaryGoal || null,
@@ -296,8 +299,10 @@ exports.updateChart = async (req, res) => {
         const chart = await DietChart.findOne({ where: { id: req.params.id, facilityId } });
         if (!chart) return res.status(404).json({ error: 'Diet chart not found' });
 
-        const admin = isUnscoped(req.user.role);
-        if (!admin) {
+        // Who may write the diet-plan sections, as opposed to merely the
+        // health-assessment ones.
+        const mayAuthorPlan = canAuthorPlan(req.user.role);
+        if (!isUnscoped(req.user.role)) {
             // Dietician must own the client this chart belongs to.
             const client = await Client.findOne({ where: { id: chart.clientId, facilityId } });
             if (!client || client.dieticianId !== req.user.id) {
@@ -313,8 +318,9 @@ exports.updateChart = async (req, res) => {
 
         if (data && typeof data === 'object') {
             const incoming = { ...data };
-            if (admin) {
-                // Admins may not author the diet-plan sections.
+            if (!mayAuthorPlan) {
+                // Staff maintain the assessment sections; the diet plan itself
+                // stays with the dietician (or the admin standing in for one).
                 DIETICIAN_ONLY_KEYS.forEach((k) => delete incoming[k]);
             }
             chart.data = { ...(chart.data || {}), ...incoming };

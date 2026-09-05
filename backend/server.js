@@ -14,6 +14,7 @@ const Joi = require('joi');
 const { sequelize, User, Facility, Client, Plan, Payment, SubscriptionPlan, Attendance, Notification, FacilityType, FacilityAutoPayEvent } = require('./models');
 const { Op } = require('sequelize');
 const { P, ROLES, isTrainerRole } = require('./config/permissions');
+const { MODULES, isModuleEnabled, resolveModules, sanitizeModuleMap } = require('./config/modules');
 
 // --- Gamification module (engine, HTTP routes, seed data) ---
 const gamification = require('./gamification/engine');
@@ -117,6 +118,44 @@ const authorize = (roles = []) => {
         }
         next();
     };
+};
+
+/**
+ * Gate a route on the facility's plan rather than the user's role.
+ *
+ * Roles answer "may this person do it" (403). Modules answer "has this facility
+ * bought it" (402) — a different question with a different remedy, so it gets a
+ * different status code and a message naming the module.
+ *
+ * The resolved facility is cached on the request, so a chain that gates on two
+ * modules still costs one query.
+ */
+const requireModule = (moduleKey) => async (req, res, next) => {
+    // The platform operator is not a customer of their own product.
+    if (req.user.role === 'superadmin') return next();
+    if (!req.user.facilityId) {
+        return res.status(400).json({ message: 'User not associated with a facility' });
+    }
+    try {
+        if (!req.facility) {
+            req.facility = await Facility.findByPk(req.user.facilityId, {
+                include: [{ model: SubscriptionPlan, attributes: ['id', 'name', 'modules'] }]
+            });
+        }
+        if (!req.facility) return res.status(404).json({ message: 'Facility not found' });
+
+        if (!isModuleEnabled(req.facility, moduleKey)) {
+            const spec = MODULES.find((m) => m.key === moduleKey);
+            return res.status(402).json({
+                message: `${spec?.label || moduleKey} is not included in your plan.`,
+                code: 'MODULE_NOT_ENABLED',
+                module: moduleKey
+            });
+        }
+        next();
+    } catch (err) {
+        return sendServerError(res, err, `module check (${moduleKey})`);
+    }
 };
 
 // Log the real error server-side, return a generic message to the client so
@@ -846,8 +885,11 @@ app.post('/api/auth/client/set-password', async (req, res) => {
 
 app.post('/api/subscription-plans', authenticate, authorize(P.PLATFORM_MANAGE), async (req, res) => {
     try {
-        const { name, price, duration, maxMembers, maxStaff, description } = req.body;
-        const plan = await SubscriptionPlan.create({ name, price, duration, maxMembers, maxStaff, description });
+        const { name, price, duration, maxMembers, maxStaff, description, modules } = req.body;
+        const plan = await SubscriptionPlan.create({
+            name, price, duration, maxMembers, maxStaff, description,
+            modules: sanitizeModuleMap(modules)
+        });
 
         // Add Notification for Super Admin
         await Notification.create({
@@ -874,7 +916,7 @@ app.get('/api/subscription-plans', authenticate, async (req, res) => {
 
 app.put('/api/subscription-plans/:id', authenticate, authorize(P.PLATFORM_MANAGE), async (req, res) => {
     try {
-        const { name, price, duration, maxMembers, maxStaff, description } = req.body;
+        const { name, price, duration, maxMembers, maxStaff, description, modules } = req.body;
         const plan = await SubscriptionPlan.findByPk(req.params.id);
         if (!plan) return res.status(404).json({ message: 'Plan not found' });
 
@@ -884,6 +926,7 @@ app.put('/api/subscription-plans/:id', authenticate, authorize(P.PLATFORM_MANAGE
         plan.maxMembers = maxMembers;
         plan.maxStaff = maxStaff;
         plan.description = description;
+        if (modules !== undefined) plan.modules = sanitizeModuleMap(modules);
 
         await plan.save();
         res.json(plan);
@@ -1290,6 +1333,13 @@ app.get('/api/superadmin/dashboard', authenticate, authorize(P.PLATFORM_MANAGE),
     }
 });
 
+// The module catalogue. Both the facility package toggles and the plan editor
+// render from this, so a new sellable module is one entry in config/modules.js
+// and no UI change at all.
+app.get('/api/modules', authenticate, authorize(P.PLATFORM_MANAGE), (req, res) => {
+    res.json(MODULES);
+});
+
 // Endpoint for Facility staff to check their own facility's subscription.
 // Gated: this exposes billing state and Razorpay identifiers, so it must never
 // be reachable by a member's client-app token.
@@ -1307,7 +1357,11 @@ app.get('/api/facility/subscription', authenticate, authorize(P.FACILITY_SUBSCRI
             await syncFacilitySubscriptionFromRazorpay(facility);
             await facility.reload({ include: [SubscriptionPlan, FacilityType] });
         }
-        res.json(facility);
+        if (!facility) return res.status(404).json({ message: 'Facility not found' });
+        // `enabledModules` is the resolved answer (facility override → plan tier
+        // → registry default) so the UI never has to re-derive it and can hide
+        // what the facility hasn't bought.
+        res.json({ ...facility.toJSON(), enabledModules: resolveModules(facility) });
     } catch (error) {
         sendServerError(res, error);
     }
@@ -2304,7 +2358,7 @@ app.put('/api/facilities/:id', authenticate, authorize(P.PLATFORM_MANAGE), async
         }
         if (modules && typeof modules === 'object') {
             const current = facility.modules || {};
-            facility.modules = { ...current, ...modules };
+            facility.modules = { ...current, ...sanitizeModuleMap(modules) };
         }
         await facility.save();
         res.json(facility);
@@ -3206,16 +3260,16 @@ app.post('/api/notifications/mark-all-read', authenticate, async (req, res) => {
 });
 
 // --- GAMIFICATION ROUTES (client app + admin portal) ---
-registerGamificationRoutes(app, { authenticate, authorize, checkSubscriptionStatus, sendServerError });
+registerGamificationRoutes(app, { authenticate, authorize, checkSubscriptionStatus, requireModule, sendServerError });
 
 // --- NUTRITION ROUTES ---
-registerNutritionRoutes(app, { authenticate, authorize, checkSubscriptionStatus, sendServerError });
+registerNutritionRoutes(app, { authenticate, authorize, checkSubscriptionStatus, requireModule, sendServerError });
 
 // --- PERSONAL TRAINING ROUTES ---
-registerPTRoutes(app, { authenticate, authorize, checkSubscriptionStatus, sendServerError });
+registerPTRoutes(app, { authenticate, authorize, checkSubscriptionStatus, requireModule, sendServerError });
 
 // --- DIETICIAN / DIET CHART ROUTES ---
-registerDieticianRoutes(app, { authenticate, authorize, checkSubscriptionStatus, sendServerError });
+registerDieticianRoutes(app, { authenticate, authorize, checkSubscriptionStatus, requireModule, sendServerError });
 
 // Initialize DB and Start Server
 // Global Error Handler

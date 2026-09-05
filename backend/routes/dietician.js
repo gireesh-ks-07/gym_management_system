@@ -2,7 +2,7 @@ const dieticianController = require('../controllers/dieticianController');
 const { P } = require('../config/permissions');
 
 function registerDieticianRoutes(app, deps) {
-    const { authenticate, authorize, checkSubscriptionStatus } = deps;
+    const { authenticate, authorize, checkSubscriptionStatus, requireModule } = deps;
 
     // Resolve facility ID for superadmins (mirrors nutrition/gamification).
     // Superadmins are not bound to one facility, so they must name the facility
@@ -21,12 +21,12 @@ function registerDieticianRoutes(app, deps) {
         next();
     };
 
-    const adminOnly = [authenticate, checkSubscriptionStatus, authorize(P.DIETICIAN_MANAGE), resolveFacilityId];
-    const chartRead = [authenticate, checkSubscriptionStatus, authorize(P.CHART_READ), resolveFacilityId];
-    const chartEdit = [authenticate, checkSubscriptionStatus, authorize(P.CHART_EDIT), resolveFacilityId];
-    const chartDelete = [authenticate, checkSubscriptionStatus, authorize(P.CHART_DELETE), resolveFacilityId];
-    const chartAuthor = [authenticate, checkSubscriptionStatus, authorize(P.CHART_AUTHOR)];
-    const clientOnly = [authenticate, authorize(P.CLIENT_APP)];
+    const adminOnly = [authenticate, checkSubscriptionStatus, requireModule('dietician'), authorize(P.DIETICIAN_MANAGE), resolveFacilityId];
+    const chartRead = [authenticate, checkSubscriptionStatus, requireModule('dietician'), authorize(P.CHART_READ), resolveFacilityId];
+    const chartEdit = [authenticate, checkSubscriptionStatus, requireModule('dietician'), authorize(P.CHART_EDIT), resolveFacilityId];
+    const chartDelete = [authenticate, checkSubscriptionStatus, requireModule('dietician'), authorize(P.CHART_DELETE), resolveFacilityId];
+    const chartAuthor = [authenticate, checkSubscriptionStatus, requireModule('dietician'), authorize(P.CHART_AUTHOR)];
+    const clientOnly = [authenticate, authorize(P.CLIENT_APP), requireModule('dietician')];
 
     // --- Dietician management (admin) ---
     app.get('/api/nutrition/dieticians', adminOnly, dieticianController.getDieticians);

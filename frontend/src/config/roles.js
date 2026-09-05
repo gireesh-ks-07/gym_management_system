@@ -42,7 +42,34 @@ export const ROUTE_ROLES = {
     personalTraining: [ADMIN, STAFF]
 };
 
+/**
+ * Which feature module each route belongs to, mirroring backend/config/modules.js.
+ *
+ * This is a SaaS: a nav item needs both a role that may open it AND a facility
+ * whose plan includes it. Routes absent from this map are core product and are
+ * always available.
+ */
+export const MODULE_ROUTES = {
+    nutrition: 'nutrition',
+    personalTraining: 'pt',
+    gamification: 'gamification'
+};
+
 export const can = (routeKey, role) => (ROUTE_ROLES[routeKey] || []).includes(role);
+
+/**
+ * Is the module behind this route included in the facility's plan?
+ *
+ * `enabledModules` comes resolved from GET /api/facility/subscription. When it
+ * is absent — superadmin, or the request hasn't landed yet — nothing is hidden;
+ * the backend is the authority and will answer 402 if it really isn't included.
+ */
+export const moduleAvailable = (routeKey, enabledModules) => {
+    const moduleKey = MODULE_ROUTES[routeKey];
+    if (!moduleKey) return true;
+    if (!enabledModules) return true;
+    return enabledModules[moduleKey] !== false;
+};
 
 /** Does this role belong to a facility, and therefore have a subscription? */
 export const isFacilityStaff = (role) => FACILITY_STAFF.includes(role);
@@ -59,6 +86,15 @@ export const homePathForRole = (role) => (role === DIETICIAN ? '/nutrition' : '/
  * access, so the list stays fully usable for them.
  */
 export const canDeleteDietChart = (role) =>
+    [SUPERADMIN, ADMIN, DIETICIAN].includes(role);
+
+/**
+ * May this role write the diet-plan sections (goals, meal plan, specifications,
+ * guidelines) rather than only the health-assessment ones? Mirrors the backend
+ * CHART_AUTHOR capability — admins are included because a facility may not
+ * employ a dietician at all.
+ */
+export const canAuthorDietPlan = (role) =>
     [SUPERADMIN, ADMIN, DIETICIAN].includes(role);
 
 /**

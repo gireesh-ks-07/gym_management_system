@@ -59,7 +59,11 @@ const SubscriptionPlan = sequelize.define('SubscriptionPlan', {
     duration: { type: DataTypes.INTEGER, allowNull: false }, // in months
     maxMembers: { type: DataTypes.INTEGER, allowNull: true }, // Optional limit
     maxStaff: { type: DataTypes.INTEGER, allowNull: true }, // Optional limit
-    description: { type: DataTypes.TEXT, allowNull: true }
+    description: { type: DataTypes.TEXT, allowNull: true },
+    // Which feature modules this tier includes. See config/modules.js — a
+    // facility's own `modules` overrides this, and the registry default applies
+    // when neither says anything.
+    modules: { type: DataTypes.JSON, defaultValue: {} }
 });
 
 const FacilityType = sequelize.define('FacilityType', {
