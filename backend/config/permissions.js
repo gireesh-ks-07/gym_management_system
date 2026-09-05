@@ -44,11 +44,12 @@ const PERMISSIONS = {
     MEMBERS_WRITE: [ADMIN, STAFF],
 
     // --- Health profile & workout schedules ---
-    // NOTE: HEALTH_READ is widened to include DIETICIAN in the next commit
-    // (read-only access to the training week, so diet plans can be built around
-    // it). Held at the current value here so this refactor is provably a
-    // no-op.
-    HEALTH_READ: [ADMIN, STAFF],
+    // Dieticians read a member's health profile and workout schedule so they can
+    // build a diet plan around the real training week. They never write it —
+    // programming stays with the trainer and admin (HEALTH_WRITE /
+    // WORKOUTS_WRITE). A dietician's read is further scoped in the handler to
+    // the members actually assigned to them.
+    HEALTH_READ: [ADMIN, STAFF, DIETICIAN],
     HEALTH_WRITE: [ADMIN, STAFF],
     WORKOUTS_WRITE: [ADMIN, STAFF],
 

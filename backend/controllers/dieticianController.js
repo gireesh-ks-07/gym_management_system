@@ -165,12 +165,41 @@ exports.getClientHealthSource = async (req, res) => {
             .map((s) => ({ name: s.name, type: s.type, dosage: s.dosage }))
             .filter((s) => s.name);
 
+        // The member's active training week, as programmed by their trainer.
+        // Section 5 of the diet chart ("Exercise / Physical Activity") asks for
+        // exactly this, day by day — without it the dietician retypes a
+        // schedule the system already holds, and the copy drifts the moment the
+        // trainer changes the program.
+        const cs = hp.currentSchedule;
+        let workoutSchedule = null;
+        if (cs && Array.isArray(cs.days)) {
+            const offDays = (Array.isArray(cs.offDays) ? cs.offDays : ['sunday'])
+                .map((d) => String(d).toLowerCase());
+            const WEEK = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+            const training = [...cs.days].sort((a, b) => (a.dayNumber || 0) - (b.dayNumber || 0));
+            // Lay the programmed days onto the week, skipping the rest days.
+            let i = 0;
+            const days = WEEK.map((weekday) => {
+                const label = weekday.charAt(0).toUpperCase() + weekday.slice(1);
+                if (offDays.includes(weekday)) return { day: label, activity: 'Rest', exercises: 0 };
+                const d = training[i % training.length];
+                i += 1;
+                return {
+                    day: label,
+                    activity: d?.focus || '',
+                    exercises: Array.isArray(d?.exercises) ? d.exercises.length : 0
+                };
+            });
+            workoutSchedule = { name: cs.name || '', offDays, days };
+        }
+
         res.json({
             height, weight, bmi, waist,
             targetWeight: hp.targetWeight ?? null,
             goalType: hp.goalType ?? null,
             bodyFat, muscleMass, bodyCompWeight: latestBC.weight ?? null,
-            supplements
+            supplements,
+            workoutSchedule
         });
     } catch (err) {
         res.status(500).json({ error: err.message });

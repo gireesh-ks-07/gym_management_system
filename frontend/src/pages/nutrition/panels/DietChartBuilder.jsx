@@ -216,6 +216,22 @@ const mergeHealthIntoData = (data, hs) => {
         .map((s) => ({ supplement: s.name, purpose: s.type || '', dose: s.dosage || '' }));
     d.supplements = [...(d.supplements || []), ...addSupp];
 
+    // Section 5 — lay the trainer's programmed week into the exercise chart, so
+    // it isn't retyped from a schedule the system already holds. Only fills days
+    // the dietician hasn't already written.
+    if (hs.workoutSchedule && Array.isArray(hs.workoutSchedule.days)) {
+        const haveDay = new Set((d.exerciseChart || [])
+            .map((r) => String(r.day || '').toLowerCase().trim()).filter(Boolean));
+        const addDays = hs.workoutSchedule.days
+            .filter((row) => !haveDay.has(String(row.day || '').toLowerCase().trim()))
+            .map((row) => ({
+                day: row.day,
+                activity: row.activity || '',
+                remarks: row.exercises ? `${row.exercises} exercises programmed` : ''
+            }));
+        d.exerciseChart = [...(d.exerciseChart || []), ...addDays];
+    }
+
     const haveBC = new Set((d.bodyComposition || []).map((r) => String(r.parameter || '').toLowerCase().trim()).filter(Boolean));
     const bc = [];
     if (hs.bodyFat != null && !haveBC.has('body fat %')) bc.push({ parameter: 'Body Fat %', current: String(hs.bodyFat) });
@@ -233,6 +249,7 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [clientName, setClientName] = useState('');
+    const [clientId, setClientId] = useState(null);
     const [foods, setFoods] = useState([]);
     const [form, setForm] = useState(null);
     const [errors, setErrors] = useState([]);
@@ -252,6 +269,7 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
                 ]);
                 setFoods(foodList || []);
                 setClientName(chart.Client?.name || '');
+                setClientId(chart.Client?.id || null);
                 const d = chart.data || {};
                 let data = {
                     personalInfo: d.personalInfo || {},
@@ -285,7 +303,9 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
                     const hs = await dieticianApi.getClientHealth(clientId, facilityId).catch(() => null);
                     if (hs) {
                         setHealthSource(hs);
-                        const isFresh = (data.supplements || []).length === 0 && (data.bodyComposition || []).length === 0;
+                        const isFresh = (data.supplements || []).length === 0
+                            && (data.bodyComposition || []).length === 0
+                            && (data.exerciseChart || []).length === 0;
                         if (isFresh) data = mergeHealthIntoData(data, hs);
                     }
                 }
@@ -471,8 +491,14 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
                     </div>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                    {clientId && (
+                        <a className="btn btn-secondary" href={`/clients/${clientId}/health`}
+                            title="Open this member's health profile, workout schedule and history">
+                            <HeartPulse size={15} /> Health profile
+                        </a>
+                    )}
                     {healthSource && (
-                        <button className="btn btn-secondary" onClick={handleSyncHealth} title="Pull supplements, metrics & body composition from the member's health profile">
+                        <button className="btn btn-secondary" onClick={handleSyncHealth} title="Pull metrics, body composition, supplements and the trainer's workout week from the member's health profile">
                             <RefreshCw size={15} /> Sync health profile
                         </button>
                     )}

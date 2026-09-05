@@ -2475,6 +2475,12 @@ app.get('/api/clients/:id/health-profile', authenticate, checkSubscriptionStatus
     try {
         const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
         if (!client) return res.status(404).json({ message: 'Client not found' });
+        // Dieticians read this profile to build a diet plan around the member's
+        // real training week — but only for the members assigned to them.
+        // Admins and staff are unscoped.
+        if (req.user.role === ROLES.DIETICIAN && client.dieticianId !== req.user.id) {
+            return res.status(403).json({ message: 'This member is not assigned to you' });
+        }
         const healthEnabled = await getFacilityHealthFeature(req.user.facilityId);
         if (!healthEnabled) {
             return res.status(403).json({ message: 'Health profile is disabled for this facility.' });

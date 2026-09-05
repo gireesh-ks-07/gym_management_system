@@ -28,9 +28,11 @@ const Panel = ({ icon: Icon, title, color, onAdd, children }) => (
     <div className="glass-panel">
         <div className="section-header">
             <div className="section-title"><Icon size={18} color={color} /> {title}</div>
-            <button className="btn btn-ghost" style={{ padding: '6px 10px', border: '1px solid var(--border-color)', borderRadius: '10px', fontSize: '0.8rem' }} onClick={onAdd}>
-                <Plus size={15} /> Add
-            </button>
+            {onAdd && (
+                <button className="btn btn-ghost" style={{ padding: '6px 10px', border: '1px solid var(--border-color)', borderRadius: '10px', fontSize: '0.8rem' }} onClick={onAdd}>
+                    <Plus size={15} /> Add
+                </button>
+            )}
         </div>
         <div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '0.6rem', maxHeight: '260px', overflowY: 'auto' }}>
             {children}
@@ -59,7 +61,10 @@ const Empty = ({ text }) => (
 
 const ALL_SECTIONS = ['metrics', 'prs', 'tests', 'mobility', 'reviews', 'supplements'];
 
-const HealthProFeatures = ({ profile, clientId, fetchData, sections = ALL_SECTIONS }) => {
+// `readOnly` (dieticians) withholds the add/delete handlers entirely, so the
+// controls are not rendered at all. The data itself stays fully visible.
+const HealthProFeatures = ({ profile, clientId, fetchData, sections = ALL_SECTIONS, readOnly = false }) => {
+    const addHandler = (key) => (readOnly ? null : () => openModal(key));
     const { addToast } = useToast();
     const [activeModal, setActiveModal] = useState(null); // section id or null
     const [form, setForm] = useState({});
@@ -144,7 +149,7 @@ const HealthProFeatures = ({ profile, clientId, fetchData, sections = ALL_SECTIO
     return (
         <>
             {has('metrics') && (
-            <Panel icon={Activity} title="Body Metrics" color="#10b981" onAdd={() => openModal('metrics')}>
+            <Panel icon={Activity} title="Body Metrics" color="#10b981" onAdd={addHandler('metrics')}>
                 {(() => {
                     const logs = [];
                     (profile.bodyCompositionHistory || []).forEach(l => logs.push({ ...l, _type: 'comp' }));
@@ -162,7 +167,7 @@ const HealthProFeatures = ({ profile, clientId, fetchData, sections = ALL_SECTIO
             </Panel>)}
 
             {has('prs') && (
-            <Panel icon={Trophy} title="Personal Records" color="#f59e0b" onAdd={() => openModal('prs')}>
+            <Panel icon={Trophy} title="Personal Records" color="#f59e0b" onAdd={addHandler('prs')}>
                 {(profile.personalRecords || []).length === 0
                     ? <Empty text="No PRs yet. Let's break some records!" />
                     : profile.personalRecords.map((log, i) => (
@@ -172,7 +177,7 @@ const HealthProFeatures = ({ profile, clientId, fetchData, sections = ALL_SECTIO
             </Panel>)}
 
             {has('tests') && (
-            <Panel icon={Activity} title="Fitness Tests" color="#8b5cf6" onAdd={() => openModal('tests')}>
+            <Panel icon={Activity} title="Fitness Tests" color="#8b5cf6" onAdd={addHandler('tests')}>
                 {(profile.fitnessTests || []).length === 0
                     ? <Empty text="No tests logged yet." />
                     : profile.fitnessTests.map((log, i) => (
@@ -182,7 +187,7 @@ const HealthProFeatures = ({ profile, clientId, fetchData, sections = ALL_SECTIO
             </Panel>)}
 
             {has('mobility') && (
-            <Panel icon={Stethoscope} title="Mobility Test" color="#06b6d4" onAdd={() => openModal('mobility')}>
+            <Panel icon={Stethoscope} title="Mobility Test" color="#06b6d4" onAdd={addHandler('mobility')}>
                 {(profile.mobilityScreenings || []).length === 0
                     ? <Empty text="No mobility screenings yet." />
                     : profile.mobilityScreenings.map((log, i) => {
@@ -193,7 +198,7 @@ const HealthProFeatures = ({ profile, clientId, fetchData, sections = ALL_SECTIO
             </Panel>)}
 
             {has('reviews') && (
-            <Panel icon={Target} title="Goal Reviews" color="#ec4899" onAdd={() => openModal('reviews')}>
+            <Panel icon={Target} title="Goal Reviews" color="#ec4899" onAdd={addHandler('reviews')}>
                 {(profile.goalReviews || []).length === 0
                     ? <Empty text="No goal reviews yet." />
                     : profile.goalReviews.map((log, i) => (
@@ -203,14 +208,14 @@ const HealthProFeatures = ({ profile, clientId, fetchData, sections = ALL_SECTIO
             </Panel>)}
 
             {has('supplements') && (
-            <Panel icon={Pill} title="Supplements" color="#22c55e" onAdd={() => openModal('supplements')}>
+            <Panel icon={Pill} title="Supplements" color="#22c55e" onAdd={addHandler('supplements')}>
                 {(profile.supplements || []).length === 0
                     ? <Empty text="No supplements added yet." />
                     : profile.supplements.map((s) => (
                         <Row key={s.id}
                             primary={<span>{s.type && <span className="status-badge" style={{ background: 'rgba(34,197,94,0.12)', color: '#22c55e', marginRight: 8 }}>{s.type}</span>}{s.name}</span>}
                             secondary={s.dosage || null}
-                            onDelete={() => deleteSupplement(s.id)} />
+                            onDelete={readOnly ? null : () => deleteSupplement(s.id)} />
                     ))}
             </Panel>)}
 
