@@ -71,9 +71,15 @@ const PERMISSIONS = {
 
     // --- Personal training ---
     PT_MANAGE: [SUPERADMIN, ADMIN, STAFF],
-    // Who may be *assigned* as a trainer on a session. Deliberately excludes
-    // dieticians: they are staff, but they do not deliver training.
-    PT_TRAINER: [ADMIN, STAFF],
+    // Who may be *assigned* as a trainer on a session.
+    //
+    // Staff only. Dieticians are excluded because they do not deliver training,
+    // and admins because the admin account is usually an organisational login
+    // rather than a person — facilities routinely name it after the gym, so
+    // including admins filled the trainer dropdown with entries like "Gold Gym"
+    // repeated once per admin account. An owner who genuinely trains should
+    // hold a staff account for that role.
+    PT_TRAINER: [STAFF],
 
     // --- Nutrition ---
     NUTRITION_MANAGE: [SUPERADMIN, ADMIN, STAFF],

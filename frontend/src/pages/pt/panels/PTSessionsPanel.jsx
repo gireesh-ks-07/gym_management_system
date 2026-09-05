@@ -3,7 +3,7 @@ import { useAuth } from '../../../context/AuthContext';
 import { useToast } from '../../../context/ToastContext';
 import { ptApi } from '../../../api/pt';
 import { Search, Plus, Pencil, Trash2, CheckCircle, XCircle } from 'lucide-react';
-import SessionModal from '../SessionModal';
+import SessionModal, { trainerLabel } from '../SessionModal';
 
 const STATUS_BADGE = { completed: 'badge-success', scheduled: 'badge-info', cancelled: 'badge-warning', no_show: 'badge-danger' };
 const STATUS_FILTERS = [
@@ -84,7 +84,7 @@ const PTSessionsPanel = () => {
                     <select className="input-field" style={{ width: 'auto', minWidth: 150 }} value={trainerFilter}
                         disabled={onlyMine} onChange={(e) => setTrainerFilter(e.target.value)}>
                         <option value="">All Trainers</option>
-                        {trainers.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                        {trainers.map((t) => <option key={t.id} value={t.id}>{trainerLabel(t, trainers)}</option>)}
                     </select>
                     <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.85rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', cursor: 'pointer' }}>
                         <input type="checkbox" checked={onlyMine} onChange={(e) => setOnlyMine(e.target.checked)} />
