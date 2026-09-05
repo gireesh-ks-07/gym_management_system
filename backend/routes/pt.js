@@ -19,6 +19,7 @@ function registerPTRoutes(app, deps) {
     // ==========================================
     // ADMIN / TRAINER ROUTES
     // ==========================================
+    app.get('/api/pt/trainers', staffAccess, ptController.getTrainers);
     app.get('/api/pt/members', staffAccess, ptController.getPTMembers);
     app.get('/api/pt/members/:clientId', staffAccess, ptController.getPTMemberDetail);
 

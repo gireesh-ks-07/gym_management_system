@@ -1,5 +1,6 @@
 const { PTSession, Client, Plan, User, Notification } = require('../models');
 const { Op, fn, col } = require('sequelize');
+const { P, isTrainerRole } = require('../config/permissions');
 
 // ==========================================================================
 // Period / usage helpers
@@ -73,6 +74,32 @@ const buildUsage = async (client, plan, reference = new Date()) => {
 // Resolve the facility scope for the request (superadmin may pass ?facilityId).
 const facilityScope = (req) => req.user.facilityId;
 
+// Validate a trainerId supplied by a client. Returns { ok, trainerId } or
+// { ok: false, message }.
+//
+// Trainers are drawn from the facility's staff, but not *every* staff member is
+// a trainer — dieticians are staff too, and they do not deliver training. This
+// used to be unvalidated entirely, so whatever id the browser sent was stored
+// and rendered as the session's trainer: a dietician picked from the shared
+// /api/staff list, or a user id belonging to another facility altogether.
+const resolveTrainerId = async (rawTrainerId, facilityId) => {
+    if (rawTrainerId === null || rawTrainerId === undefined || rawTrainerId === '') {
+        return { ok: true, trainerId: null };
+    }
+    const trainerId = parseInt(rawTrainerId, 10);
+    if (!Number.isInteger(trainerId)) {
+        return { ok: false, message: 'Invalid trainer' };
+    }
+    const trainer = await User.findOne({ where: { id: trainerId, facilityId } });
+    if (!trainer) {
+        return { ok: false, message: 'Trainer not found in this facility' };
+    }
+    if (!isTrainerRole(trainer.role)) {
+        return { ok: false, message: `${trainer.name} cannot be assigned as a trainer` };
+    }
+    return { ok: true, trainerId };
+};
+
 // Only a member whose active plan is a PT plan is a "PT member".
 const getClientWithPTPlan = async (clientId, facilityId) => {
     const client = await Client.findOne({
@@ -87,6 +114,25 @@ const getClientWithPTPlan = async (clientId, facilityId) => {
 // ==========================================================================
 // ADMIN / TRAINER ENDPOINTS
 // ==========================================================================
+
+// GET /api/pt/trainers — the facility's trainer roster.
+//
+// Deliberately separate from /api/staff, which lists everyone the admin manages
+// (staff *and* dieticians) for the Staff page. Reusing that list here is what
+// made dieticians show up as trainers.
+exports.getTrainers = async (req, res) => {
+    try {
+        const facilityId = facilityScope(req);
+        const trainers = await User.findAll({
+            where: { facilityId, role: { [Op.in]: P.PT_TRAINER } },
+            attributes: ['id', 'name', 'email', 'role'],
+            order: [['name', 'ASC']]
+        });
+        res.json(trainers);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
 
 // GET /api/pt/members — every member on a PT plan, with current-period usage.
 exports.getPTMembers = async (req, res) => {
@@ -191,6 +237,9 @@ exports.createSession = async (req, res) => {
         if (error === 'not_found') return res.status(404).json({ message: 'Member not found' });
         if (error === 'not_pt') return res.status(400).json({ message: 'Member is not on a Personal Training plan' });
 
+        const trainer = await resolveTrainerId(trainerId, facilityId);
+        if (!trainer.ok) return res.status(400).json({ message: trainer.message });
+
         const requestedStatus = ['scheduled', 'completed', 'cancelled', 'no_show'].includes(status) ? status : 'scheduled';
         const when = new Date(sessionDate);
 
@@ -205,7 +254,7 @@ exports.createSession = async (req, res) => {
             facilityId,
             clientId,
             planId: plan.id,
-            trainerId: trainerId || null,
+            trainerId: trainer.trainerId,
             sessionDate: when,
             durationMinutes: durationMinutes || null,
             notes: notes || null,
@@ -253,7 +302,11 @@ exports.updateSession = async (req, res) => {
         }
         if (nextStatus !== 'completed') session.completedAt = null;
 
-        if (trainerId !== undefined) session.trainerId = trainerId || null;
+        if (trainerId !== undefined) {
+            const trainer = await resolveTrainerId(trainerId, facilityId);
+            if (!trainer.ok) return res.status(400).json({ message: trainer.message });
+            session.trainerId = trainer.trainerId;
+        }
         if (sessionDate !== undefined) session.sessionDate = nextDate;
         if (durationMinutes !== undefined) session.durationMinutes = durationMinutes || null;
         if (notes !== undefined) session.notes = notes;

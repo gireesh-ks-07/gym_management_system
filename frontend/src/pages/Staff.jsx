@@ -62,7 +62,7 @@ const Staff = () => {
     const handleEditClick = (s) => {
         setIsEditMode(true);
         setCurrentStaffId(s.id);
-        setFormData({ name: s.name, email: s.email, password: '', role: 'staff', phone: s.phone || '' });
+        setFormData({ name: s.name, email: s.email, password: '', role: s.role || 'staff', phone: s.phone || '' });
         setShowModal(true);
     };
 
@@ -263,22 +263,23 @@ const Staff = () => {
                             placeholder="9876543210"
                         />
                     </div>
-                    {!isEditMode && (
-                        <div className="input-group">
-                            <label className="input-label">Role</label>
-                            <select
-                                className="input-field"
-                                value={formData.role}
-                                onChange={e => setFormData({ ...formData, role: e.target.value })}
-                            >
-                                <option value="staff">Staff</option>
-                                <option value="dietician">Dietician</option>
-                            </select>
-                            <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.4rem' }}>
-                                Dieticians get a restricted login to manage diet charts for the members assigned to them.
-                            </p>
-                        </div>
-                    )}
+                    <div className="input-group">
+                        <label className="input-label">Role</label>
+                        <select
+                            className="input-field"
+                            value={formData.role}
+                            disabled={isEditMode}
+                            onChange={e => setFormData({ ...formData, role: e.target.value })}
+                        >
+                            <option value="staff">Staff</option>
+                            <option value="dietician">Dietician</option>
+                        </select>
+                        <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.4rem' }}>
+                            {isEditMode
+                                ? 'Role cannot be changed after the account is created.'
+                                : 'Dieticians get a restricted login to manage diet charts for the members assigned to them. Only Staff can be assigned as trainers on PT sessions.'}
+                        </p>
+                    </div>
                     {!isEditMode && (
                         <div className="input-group">
                             <label className="input-label">Temporary Password</label>

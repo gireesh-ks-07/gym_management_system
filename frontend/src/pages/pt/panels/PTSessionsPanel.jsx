@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../../context/AuthContext';
 import { useToast } from '../../../context/ToastContext';
 import { ptApi } from '../../../api/pt';
-import api from '../../../api';
 import { Search, Plus, Pencil, Trash2, CheckCircle, XCircle } from 'lucide-react';
 import SessionModal from '../SessionModal';
 
@@ -36,14 +35,14 @@ const PTSessionsPanel = () => {
             const params = { facilityId };
             if (statusFilter) params.status = statusFilter;
             if (trainerFilter) params.trainerId = trainerFilter;
-            const [sess, mem, staffRes] = await Promise.all([
+            const [sess, mem, trainerList] = await Promise.all([
                 ptApi.getSessions(params),
                 ptApi.getMembers(facilityId),
-                api.get('/staff').catch(() => ({ data: [] }))
+                ptApi.getTrainers(facilityId).catch(() => [])
             ]);
             setSessions(sess);
             setMembers(mem);
-            setTrainers(staffRes.data || []);
+            setTrainers(trainerList || []);
         } catch (e) { addToast('Failed to load sessions', 'error'); }
         finally { setLoading(false); }
     };
