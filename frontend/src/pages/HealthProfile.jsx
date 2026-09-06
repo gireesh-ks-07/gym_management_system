@@ -323,18 +323,23 @@ const HealthProfile = () => {
       const hierarchy = { done: 1, cardio: 2, missed: 3, off_day: 4 };
       rawStatuses.sort((a, b) => (hierarchy[a] || 99) - (hierarchy[b] || 99));
 
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const isPast = date < today;
-
-      let singleStatus = rawStatuses.length > 0 ? rawStatuses[0] : null;
-      if (!singleStatus && isPast) {
-        singleStatus = 'off_day';
-      }
+      // Only what the server actually recorded is shown. The calendar used to
+      // fall back to 'off_day' for *any* past date with no event, which painted
+      // a rest day over every day before the member existed — a member added
+      // today showed the whole preceding month as time off.
+      //
+      // The backfill belongs to the server and already happens there: the
+      // health-profile endpoint fills a schedule's startDate..today with
+      // 'off_day' on the schedule's off days and 'missed' on its workout days.
+      // A date with nothing against it here is a date outside any schedule, and
+      // has no status to report.
+      const singleStatus = rawStatuses.length > 0 ? rawStatuses[0] : null;
 
       const statuses = singleStatus ? [singleStatus] : [];
-      const hasDone = singleStatus !== null;
-      return { key, day: idx + 1, isBlank: false, statuses, events, hasDone };
+      // Not "completed" — any logged status (done, cardio, missed, off day)
+      // tints the cell. It was named hasDone, which read as the opposite.
+      const hasEvent = singleStatus !== null;
+      return { key, day: idx + 1, isBlank: false, statuses, events, hasEvent };
     });
     return [...leading, ...days];
   }, [calendarMonth, eventMap]);
@@ -685,12 +690,12 @@ const HealthProfile = () => {
                 if (item.isBlank) return <div key={`blank-${i}`} />;
                 const todayKey = toInputDate(new Date());
                 const isToday = item.key === todayKey;
-                const hasDone = item.hasDone;
+                const hasEvent = item.hasEvent;
 
                 return (
                   <div
                     key={item.key}
-                    className={`calendar-day-cell ${isToday ? 'today' : ''} ${hasDone ? 'active-day' : ''}`}
+                    className={`calendar-day-cell ${isToday ? 'today' : ''} ${hasEvent ? 'active-day' : ''}`}
                   >
                     <span>{item.day}</span>
                     <div className="workout-dots" style={{ display: 'flex', gap: '2px', marginTop: '4px' }}>
