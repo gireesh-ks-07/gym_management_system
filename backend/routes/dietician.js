@@ -25,7 +25,10 @@ function registerDieticianRoutes(app, deps) {
     const chartRead = [authenticate, checkSubscriptionStatus, requireModule('dietician'), authorize(P.CHART_READ), resolveFacilityId];
     const chartEdit = [authenticate, checkSubscriptionStatus, requireModule('dietician'), authorize(P.CHART_EDIT), resolveFacilityId];
     const chartDelete = [authenticate, checkSubscriptionStatus, requireModule('dietician'), authorize(P.CHART_DELETE), resolveFacilityId];
+    const chartExport = [authenticate, checkSubscriptionStatus, requireModule('dietician'), authorize(P.CHART_EXPORT), resolveFacilityId];
     const chartAuthor = [authenticate, checkSubscriptionStatus, requireModule('dietician'), authorize(P.CHART_AUTHOR)];
+    const letterheadRead = [authenticate, checkSubscriptionStatus, authorize(P.LETTERHEAD_READ), resolveFacilityId];
+    const letterheadManage = [authenticate, checkSubscriptionStatus, authorize(P.LETTERHEAD_MANAGE), resolveFacilityId];
     const clientOnly = [authenticate, authorize(P.CLIENT_APP), requireModule('dietician')];
 
     // --- Dietician management (admin) ---
@@ -43,6 +46,14 @@ function registerDieticianRoutes(app, deps) {
     app.post('/api/nutrition/charts', chartAuthor, dieticianController.createChart);
     app.put('/api/nutrition/charts/:id', chartEdit, dieticianController.updateChart);
     app.delete('/api/nutrition/charts/:id', chartDelete, dieticianController.deleteChart);
+    app.get('/api/nutrition/charts/:id/pdf', chartExport, dieticianController.exportChartPdf);
+
+    // --- Letterhead (facility identity printed on the PDF) ---
+    // Not behind requireModule('dietician'): the letterhead is facility identity
+    // that any future generated document will use, and a facility must be able
+    // to keep it current whether or not the dietician add-on is switched on.
+    app.get('/api/nutrition/letterhead', letterheadRead, dieticianController.getLetterhead);
+    app.put('/api/nutrition/letterhead', letterheadManage, dieticianController.updateLetterhead);
 
     // --- Client app (member) ---
     app.get('/api/client/nutrition/chart', clientOnly, dieticianController.getClientChart);

@@ -2,12 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../../context/AuthContext';
 import { useToast } from '../../../context/ToastContext';
 import { dieticianApi } from '../../../api/dietician';
-import { Search, Stethoscope, Users } from 'lucide-react';
+import { Search, Stethoscope, Users, FileSignature, Save } from 'lucide-react';
+import { canManageLetterhead } from '../../../config/roles';
 
 // Admin view: manage dieticians and assign members to them. A member can only
 // be seen (and given a diet chart) by the dietician they are assigned to.
 const DieticiansPanel = () => {
-    const { facilitySubscription } = useAuth();
+    const { user, facilitySubscription } = useAuth();
     const { addToast } = useToast();
     const facilityId = facilitySubscription?.id;
 
@@ -16,16 +17,21 @@ const DieticiansPanel = () => {
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState('');
     const [savingId, setSavingId] = useState(null);
+    const [letterhead, setLetterhead] = useState(null);
+    const [savingLetterhead, setSavingLetterhead] = useState(false);
+    const canEditLetterhead = canManageLetterhead(user?.role);
 
     const load = async () => {
         try {
             setLoading(true);
-            const [d, c] = await Promise.all([
+            const [d, c, lh] = await Promise.all([
                 dieticianApi.getDieticians(facilityId),
-                dieticianApi.getClients(facilityId)
+                dieticianApi.getClients(facilityId),
+                dieticianApi.getLetterhead(facilityId).catch(() => null)
             ]);
             setDieticians(d);
             setClients(c);
+            setLetterhead(lh);
         } catch (e) {
             addToast('Failed to load dieticians', 'error');
         } finally {
@@ -53,6 +59,77 @@ const DieticiansPanel = () => {
         }
     };
 
+    const saveLetterhead = async () => {
+        setSavingLetterhead(true);
+        try {
+            const saved = await dieticianApi.updateLetterhead({
+                address: letterhead.address || '',
+                tagline: letterhead.tagline || '',
+                email: letterhead.email || '',
+                phone: letterhead.phone || ''
+            }, facilityId);
+            setLetterhead(saved);
+            addToast('Letterhead saved', 'success');
+        } catch (e) {
+            addToast(e.response?.data?.error || 'Failed to save letterhead', 'error');
+        } finally {
+            setSavingLetterhead(false);
+        }
+    };
+
+    // Rendered above both the populated and the empty state: a facility should be
+    // able to set its letterhead before it has hired anyone to sign one.
+    const letterheadCard = letterhead && (
+        <div className="card" style={{ padding: '1.25rem 1.5rem', marginBottom: '1.5rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.35rem' }}>
+                <FileSignature size={18} style={{ color: 'var(--primary)' }} />
+                <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 700 }}>Document letterhead</h3>
+            </div>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.83rem', margin: '0 0 1rem' }}>
+                Printed in the footer of every diet chart PDF. The practitioner's name and
+                credentials come from their staff record and appear in the header.
+            </p>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.9rem' }}>
+                <div className="input-group" style={{ margin: 0 }}>
+                    <label className="input-label">Facility name</label>
+                    <input className="input-field" value={letterhead.name || ''} disabled
+                        title="Managed by the platform administrator" />
+                </div>
+                <div className="input-group" style={{ margin: 0 }}>
+                    <label className="input-label">Tagline</label>
+                    <input className="input-field" value={letterhead.tagline || ''} disabled={!canEditLetterhead}
+                        placeholder="Ex. Where science meets sustenance"
+                        onChange={(e) => setLetterhead({ ...letterhead, tagline: e.target.value })} />
+                </div>
+                <div className="input-group" style={{ margin: 0 }}>
+                    <label className="input-label">Address</label>
+                    <input className="input-field" value={letterhead.address || ''} disabled={!canEditLetterhead}
+                        placeholder="Ex. Kuriachira P.O, Thrissur, Kerala"
+                        onChange={(e) => setLetterhead({ ...letterhead, address: e.target.value })} />
+                </div>
+                <div className="input-group" style={{ margin: 0 }}>
+                    <label className="input-label">Email</label>
+                    <input className="input-field" type="email" value={letterhead.email || ''} disabled={!canEditLetterhead}
+                        placeholder="clinic@example.com"
+                        onChange={(e) => setLetterhead({ ...letterhead, email: e.target.value })} />
+                </div>
+                <div className="input-group" style={{ margin: 0 }}>
+                    <label className="input-label">Phone</label>
+                    <input className="input-field" value={letterhead.phone || ''} disabled={!canEditLetterhead}
+                        placeholder="9446619574"
+                        onChange={(e) => setLetterhead({ ...letterhead, phone: e.target.value })} />
+                </div>
+            </div>
+            {canEditLetterhead && (
+                <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'flex-end' }}>
+                    <button className="btn btn-primary" onClick={saveLetterhead} disabled={savingLetterhead}>
+                        <Save size={16} /> {savingLetterhead ? 'Saving…' : 'Save letterhead'}
+                    </button>
+                </div>
+            )}
+        </div>
+    );
+
     const filtered = clients.filter((c) =>
         (c.name || '').toLowerCase().includes(search.toLowerCase()) ||
         (c.phone || '').includes(search)
@@ -64,15 +141,20 @@ const DieticiansPanel = () => {
 
     if (dieticians.length === 0) {
         return (
-            <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-secondary)' }}>
+            <div>
+                {letterheadCard}
+                <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-secondary)' }}>
                 <Stethoscope size={48} style={{ opacity: 0.15, marginBottom: '1rem' }} />
                 <p>No dieticians yet. Add a dietician from the <b>Staff</b> section (choose the “Dietician” role), then assign members here.</p>
+                </div>
             </div>
         );
     }
 
     return (
         <div>
+            {letterheadCard}
+
             {/* Dietician summary cards */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
                 {dieticians.map((d) => (
@@ -85,6 +167,15 @@ const DieticiansPanel = () => {
                             <div style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: 5 }}>
                                 <Users size={13} /> {d.clientCount} member{d.clientCount === 1 ? '' : 's'}
                             </div>
+                            {(d.qualification || d.registrationNumber) ? (
+                                <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginTop: 2 }}>
+                                    {[d.qualification, d.registrationNumber && `Reg. ${d.registrationNumber}`].filter(Boolean).join(' · ')}
+                                </div>
+                            ) : (
+                                <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginTop: 2, fontStyle: 'italic' }}>
+                                    No credentials set — add them in Staff
+                                </div>
+                            )}
                         </div>
                     </div>
                 ))}

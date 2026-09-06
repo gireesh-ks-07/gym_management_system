@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import api from '../api';
-import { Plus, Tag, CheckCircle } from 'lucide-react';
+import { Plus, Tag, CheckCircle, Users } from 'lucide-react';
 import { useToast } from '../context/ToastContext';
 import ActionMenu from '../components/ActionMenu';
 import Modal from '../components/Modal';
@@ -15,7 +15,7 @@ const Plans = () => {
     const [currentPlanId, setCurrentPlanId] = useState(null);
     const [formData, setFormData] = useState({
         name: '', price: '', duration: '', description: '', features: '',
-        planType: 'normal', ptSessionsCount: '', ptSessionPeriod: 'weekly'
+        planType: 'normal', ptSessionsCount: '', ptSessionPeriod: 'weekly', memberCapacity: 1
     });
 
     const location = useLocation();
@@ -39,7 +39,7 @@ const Plans = () => {
         const queryParams = new URLSearchParams(location.search);
         if (queryParams.get('action') === 'add') {
             setIsEditMode(false);
-            setFormData({ name: '', price: '', duration: '', description: '', features: '', planType: 'normal', ptSessionsCount: '', ptSessionPeriod: 'weekly' });
+            setFormData({ name: '', price: '', duration: '', description: '', features: '', planType: 'normal', ptSessionsCount: '', ptSessionPeriod: 'weekly', memberCapacity: 1 });
             setShowModal(true);
             navigate(location.pathname, { replace: true });
         }
@@ -56,6 +56,7 @@ const Plans = () => {
             features: plan.features ? (Array.isArray(plan.features) ? plan.features.join('\n') : plan.features) : '',
             planType: plan.planType || 'normal',
             ptSessionsCount: plan.ptSessionsCount ?? '',
+            memberCapacity: plan.memberCapacity ?? 1,
             ptSessionPeriod: plan.ptSessionPeriod || 'weekly'
         });
         setShowModal(true);
@@ -81,7 +82,7 @@ const Plans = () => {
 
     const handleAddClick = () => {
         setIsEditMode(false);
-        setFormData({ name: '', price: '', duration: '', description: '', features: '', planType: 'normal', ptSessionsCount: '', ptSessionPeriod: 'weekly' });
+        setFormData({ name: '', price: '', duration: '', description: '', features: '', planType: 'normal', ptSessionsCount: '', ptSessionPeriod: 'weekly', memberCapacity: 1 });
         setShowModal(true);
     };
 
@@ -113,7 +114,10 @@ const Plans = () => {
                 features: formData.features.split('\n').filter(f => f.trim() !== ''),
                 planType: formData.planType,
                 ptSessionsCount: formData.planType === 'pt' ? Number(formData.ptSessionsCount) : null,
-                ptSessionPeriod: formData.planType === 'pt' ? formData.ptSessionPeriod : null
+                ptSessionPeriod: formData.planType === 'pt' ? formData.ptSessionPeriod : null,
+                // Personal training is one-to-one, so a PT plan always covers a
+                // single member. The server enforces this too.
+                memberCapacity: formData.planType === 'pt' ? 1 : Number(formData.memberCapacity) || 1
             };
 
             if (isEditMode) {
@@ -123,7 +127,7 @@ const Plans = () => {
                 await api.post('/plans', payload);
                 addToast('Plan created successfully', 'success');
             }
-            setFormData({ name: '', price: '', duration: '', description: '', features: '', planType: 'normal', ptSessionsCount: '', ptSessionPeriod: 'weekly' });
+            setFormData({ name: '', price: '', duration: '', description: '', features: '', planType: 'normal', ptSessionsCount: '', ptSessionPeriod: 'weekly', memberCapacity: 1 });
             setShowModal(false);
             fetchPlans();
         } catch {
@@ -192,6 +196,11 @@ const Plans = () => {
                                     {plan.planType === 'pt' && (
                                         <span style={{ fontSize: '0.65rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#6366F1', background: 'rgba(99,102,241,0.12)', padding: '2px 8px', borderRadius: 999 }}>
                                             PT · {plan.ptSessionsCount}/{plan.ptSessionPeriod === 'monthly' ? 'mo' : 'wk'}
+                                        </span>
+                                    )}
+                                    {plan.memberCapacity > 1 && (
+                                        <span style={{ fontSize: '0.65rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#10B981', background: 'rgba(16,185,129,0.12)', padding: '2px 8px', borderRadius: 999, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                                            <Users size={11} /> {plan.memberCapacity} members
                                         </span>
                                     )}
                                 </div>
@@ -277,6 +286,25 @@ const Plans = () => {
                                     <option value="monthly">Per Month</option>
                                 </select>
                             </div>
+                        </div>
+                    )}
+                    {formData.planType === 'normal' && (
+                        <div className="input-group">
+                            <label className="input-label">Members Covered</label>
+                            <select className="input-field" value={formData.memberCapacity}
+                                onChange={e => setFormData({ ...formData, memberCapacity: Number(e.target.value) })}>
+                                <option value={1}>1 — Individual</option>
+                                <option value={2}>2 — Couple</option>
+                                <option value={3}>3 — Group of 3</option>
+                                <option value={4}>4 — Family of 4</option>
+                                <option value={5}>5 — Group of 5</option>
+                                <option value={6}>6 — Group of 6</option>
+                            </select>
+                            <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.4rem' }}>
+                                {formData.memberCapacity > 1
+                                    ? `The price below is the total for all ${formData.memberCapacity} members — one payment, one shared renewal date.`
+                                    : 'A single member holds this plan.'}
+                            </p>
                         </div>
                     )}
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>

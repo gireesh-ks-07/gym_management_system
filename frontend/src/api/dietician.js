@@ -35,4 +35,24 @@ export const dieticianApi = {
 
     deleteChart: (id) =>
         api.delete(`/nutrition/charts/${id}`).then(res => res.data),
+
+    // Download the letterheaded PDF. Returns { blob, filename } — the filename
+    // comes from the server's Content-Disposition so the browser download and
+    // the document itself agree on what the chart is called.
+    exportChartPdf: (id, facilityId) =>
+        api.get(`/nutrition/charts/${id}/pdf`, {
+            params: { facilityId },
+            responseType: 'blob'
+        }).then((res) => {
+            const disposition = res.headers['content-disposition'] || '';
+            const match = /filename="?([^"]+)"?/.exec(disposition);
+            return { blob: res.data, filename: match ? match[1] : 'diet-chart.pdf' };
+        }),
+
+    // --- Letterhead (facility identity printed on generated documents) ---
+    getLetterhead: (facilityId) =>
+        api.get('/nutrition/letterhead', { params: { facilityId } }).then(res => res.data),
+
+    updateLetterhead: (data, facilityId) =>
+        api.put('/nutrition/letterhead', data, { params: { facilityId } }).then(res => res.data),
 };

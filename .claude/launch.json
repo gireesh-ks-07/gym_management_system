@@ -9,8 +9,8 @@
     },
     {
       "name": "api",
-      "runtimeExecutable": "node",
-      "runtimeArgs": ["server.js"],
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["start"],
       "cwd": "backend",
       "port": 3000
     }

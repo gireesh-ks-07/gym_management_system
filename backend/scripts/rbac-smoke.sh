@@ -62,6 +62,8 @@ check "cannot log a workout day"             403 POST /clients/29/workout-schedu
 check "cannot list all members"              403 GET /clients "$DIET"
 check "cannot reach PT module"               403 GET /pt/sessions "$DIET"
 check "cannot manage staff"                  403 GET /staff "$DIET"
+check "reads the letterhead"                 200 GET /nutrition/letterhead "$DIET"
+check "cannot edit the letterhead"           403 PUT /nutrition/letterhead "$DIET" '{"tagline":"x"}'
 
 echo
 echo "=== trainer (staff): programme yes, chart deletion no ==="
@@ -69,6 +71,10 @@ check "reads member health"                  200 GET /clients/29/health-profile 
 check "reads trainer roster"                 200 GET /pt/trainers "$TRAINER"
 check "cannot delete a diet chart"           403 DELETE /nutrition/charts/18 "$TRAINER"
 check "cannot manage dieticians"             403 GET /nutrition/dieticians "$TRAINER"
+# Staff read charts on screen but do not issue the signed, letterheaded PDF.
+check "cannot export a diet chart PDF"       403 GET /nutrition/charts/18/pdf "$TRAINER"
+check "cannot read the letterhead"           403 GET /nutrition/letterhead "$TRAINER"
+check "cannot edit the letterhead"           403 PUT /nutrition/letterhead "$TRAINER" '{"tagline":"x"}'
 
 echo
 echo "=== admin: full facility authority ==="
@@ -76,6 +82,8 @@ check "reads trainer roster"                 200 GET /pt/trainers "$ADMIN"
 check "reads PT sessions"                    200 GET /pt/sessions "$ADMIN"
 check "manages dieticians"                   200 GET /nutrition/dieticians "$ADMIN"
 check "reads all members"                    200 GET /clients "$ADMIN"
+check "reads the letterhead"                 200 GET /nutrition/letterhead "$ADMIN"
+check "edits the letterhead"                 200 PUT /nutrition/letterhead "$ADMIN" '{"tagline":"Where science meets sustenance"}'
 
 echo
 echo "=== trainer validation ==="

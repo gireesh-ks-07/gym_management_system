@@ -1,6 +1,7 @@
-const { User, Client, DietChart, Notification } = require('../models');
+const { User, Client, DietChart, Facility, Notification } = require('../models');
 const { Op } = require('sequelize');
 const { isUnscoped, canAuthorPlan } = require('../config/permissions');
+const { buildDietChartPdf, pdfFilename } = require('../services/dietChartPdf');
 
 // Diet-plan sections that only a dietician may author. On an admin edit these
 // keys are stripped from the incoming payload before merging, so admins can
@@ -35,7 +36,7 @@ exports.getDieticians = async (req, res) => {
         const facilityId = req.user.facilityId;
         const dieticians = await User.findAll({
             where: { facilityId, role: 'dietician' },
-            attributes: ['id', 'name', 'email', 'phone'],
+            attributes: ['id', 'name', 'email', 'phone', 'qualification', 'registrationNumber'],
             order: [['name', 'ASC']]
         });
         // Attach assigned-client counts.
@@ -347,6 +348,80 @@ exports.deleteChart = async (req, res) => {
         }
         await chart.destroy();
         res.json({ message: 'Diet chart deleted' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// ==========================================
+// LETTERHEAD (facility identity on generated documents)
+// ==========================================
+const LETTERHEAD_FIELDS = ['name', 'address', 'tagline', 'email', 'phone'];
+
+exports.getLetterhead = async (req, res) => {
+    try {
+        const facility = await Facility.findByPk(req.user.facilityId, {
+            attributes: ['id', ...LETTERHEAD_FIELDS]
+        });
+        if (!facility) return res.status(404).json({ error: 'Facility not found' });
+        res.json(facility);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// `name` is deliberately not writable here — renaming the facility has effects
+// well beyond the letterhead and stays with the super-admin.
+exports.updateLetterhead = async (req, res) => {
+    try {
+        const facility = await Facility.findByPk(req.user.facilityId);
+        if (!facility) return res.status(404).json({ error: 'Facility not found' });
+
+        for (const key of ['address', 'tagline', 'email', 'phone']) {
+            if (key in req.body) facility[key] = req.body[key] === '' ? null : req.body[key];
+        }
+        await facility.save();
+        res.json({
+            id: facility.id,
+            ...Object.fromEntries(LETTERHEAD_FIELDS.map((k) => [k, facility[k]]))
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// Export a chart as the letterheaded PDF hand-out.
+//
+// Scoping is identical to getChart — a dietician may only export a chart for a
+// client assigned to them — but the route carries CHART_EXPORT rather than
+// CHART_READ, so staff can read a chart on screen without being able to issue
+// the signed document.
+exports.exportChartPdf = async (req, res) => {
+    try {
+        const facilityId = req.user.facilityId;
+        const chart = await DietChart.findOne({
+            where: { id: req.params.id, facilityId },
+            include: [
+                { model: Client, attributes: ['id', 'name', 'email', 'phone', 'gender', 'height', 'weight'] },
+                { model: User, as: 'dietician', attributes: ['id', 'name', 'qualification', 'registrationNumber'] }
+            ]
+        });
+        if (!chart) return res.status(404).json({ error: 'Diet chart not found' });
+
+        const allowedIds = await scopedClientIds(req);
+        if (allowedIds !== null && !allowedIds.includes(chart.clientId)) {
+            return res.status(403).json({ error: 'Forbidden' });
+        }
+
+        const facility = await Facility.findByPk(facilityId, {
+            attributes: ['id', 'name', 'address', 'tagline', 'email', 'phone']
+        });
+
+        const pdf = await buildDietChartPdf(chart, facility ? facility.get({ plain: true }) : {});
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Length', pdf.length);
+        res.setHeader('Content-Disposition', `attachment; filename="${pdfFilename(chart).replace(/"/g, '')}"`);
+        res.send(pdf);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
