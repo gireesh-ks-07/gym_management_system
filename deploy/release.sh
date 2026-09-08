@@ -29,14 +29,22 @@ say "Running migrations"
 # crash-loop after the old process has already been replaced.
 ( cd backend && npm run migrate )
 
-say "Building the dashboard"
-# Full install here — vite and the react plugin are devDependencies.
-npm --prefix frontend ci
-npm --prefix frontend run build
+# The dashboard is only built here when nginx is the one serving it. With
+# Amplify hosting the frontend, set SKIP_FRONTEND=1 and this box serves the API
+# alone — no second, drifting copy of the build.
+if [ "${SKIP_FRONTEND:-0}" = "1" ]; then
+    say "Skipping the dashboard build (SKIP_FRONTEND=1)"
+else
+    say "Building the dashboard"
+    # --include=dev is required: vite and the react plugin are devDependencies,
+    # and the NODE_ENV=production above makes npm omit them by default.
+    npm --prefix frontend ci --include=dev
+    npm --prefix frontend run build
 
-say "Publishing to ${WEB_ROOT}"
-sudo install -d -o "$USER" -g "$USER" "$WEB_ROOT"
-rsync -a --delete frontend/dist/ "$WEB_ROOT/"
+    say "Publishing to ${WEB_ROOT}"
+    sudo install -d -o "$USER" -g "$USER" "$WEB_ROOT"
+    rsync -a --delete frontend/dist/ "$WEB_ROOT/"
+fi
 
 say "Restarting the API"
 sudo install -d -o "$USER" -g "$USER" /var/log/facility
