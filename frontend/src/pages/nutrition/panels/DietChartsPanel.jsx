@@ -2,10 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../../context/AuthContext';
 import { useToast } from '../../../context/ToastContext';
 import { dieticianApi } from '../../../api/dietician';
-import { Search, FileText, Trash2, Eye, User, Users, CheckCircle2, ChevronRight, Loader, Plus } from 'lucide-react';
+import { Search, FileText, Trash2, Eye, User, Users, CheckCircle2, ChevronRight, Loader, Plus, Download } from 'lucide-react';
 import DietChartBuilder from './DietChartBuilder';
 import Modal from '../../../components/Modal';
-import { canDeleteDietChart, canAuthorDietPlan } from '../../../config/roles';
+import { canDeleteDietChart, canAuthorDietPlan, canExportDietChart } from '../../../config/roles';
 
 const GOAL_LABEL = {
     weight_loss: 'Weight Loss', weight_gain: 'Weight Gain', maintenance: 'Maintenance',
@@ -22,6 +22,7 @@ const DietChartsPanel = () => {
     const isDietician = user?.role === 'dietician';
     const canDelete = canDeleteDietChart(user?.role);
     const canAuthor = canAuthorDietPlan(user?.role);
+    const canExport = canExportDietChart(user?.role);
 
     const [charts, setCharts] = useState([]);
     const [clients, setClients] = useState([]);
@@ -31,6 +32,7 @@ const DietChartsPanel = () => {
 
     const [openChartId, setOpenChartId] = useState(null); // chart open in the builder
     const [busyClientId, setBusyClientId] = useState(null);
+    const [downloadingId, setDownloadingId] = useState(null);
     const [newChart, setNewChart] = useState({ open: false, clientId: '', search: '' });
 
     const load = async () => {
@@ -81,6 +83,26 @@ const DietChartsPanel = () => {
         }
     };
 
+    // Download the letterheaded PDF. The blob is fetched through the same axios
+    // instance as everything else so the auth header travels with it — a plain
+    // <a href> would hit the endpoint unauthenticated.
+    const handleDownload = async (chart) => {
+        setDownloadingId(chart.id);
+        try {
+            const { blob, filename } = await dieticianApi.exportChartPdf(chart.id, facilityId);
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.click();
+            window.URL.revokeObjectURL(url);
+        } catch (e) {
+            addToast(e.response?.data?.error || 'Failed to download PDF', 'error');
+        } finally {
+            setDownloadingId(null);
+        }
+    };
+
     const handleDelete = (chart) => showConfirm(
         `Delete this diet chart for ${chart.Client?.name || 'this member'}?`,
         async () => {
@@ -96,6 +118,7 @@ const DietChartsPanel = () => {
                 chartId={openChartId}
                 facilityId={facilityId}
                 readOnly={!canAuthor}
+                canExport={canExport}
                 onBack={() => { setOpenChartId(null); load(); }}
             />
         );
@@ -275,6 +298,14 @@ const DietChartsPanel = () => {
                                 <button className="btn btn-primary" style={{ flex: 1, justifyContent: 'center' }} onClick={() => setOpenChartId(chart.id)}>
                                     <Eye size={16} /> View
                                 </button>
+                                {canExport && (
+                                    <button className="icon-btn" title="Download PDF" disabled={downloadingId === chart.id}
+                                        onClick={() => handleDownload(chart)}>
+                                        {downloadingId === chart.id
+                                            ? <Loader size={16} style={{ animation: 'spinner 0.8s linear infinite' }} />
+                                            : <Download size={16} />}
+                                    </button>
+                                )}
                                 {canDelete && (
                                     <button className="icon-btn" title="Delete" onClick={() => handleDelete(chart)} style={{ color: 'var(--danger)' }}><Trash2 size={16} /></button>
                                 )}

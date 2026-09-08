@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import api from '../api';
-import { Plus, Search, User, Phone, Ruler, Weight, Calendar, Mail, Filter, CreditCard, CheckSquare, Square, HeartPulse, Target, Repeat2, ClipboardList, AlertCircle } from 'lucide-react';
+import { Plus, Search, User, Phone, Ruler, Weight, Calendar, Mail, Filter, CreditCard, CheckSquare, Square, HeartPulse, Target, Repeat2, ClipboardList, AlertCircle, Users } from 'lucide-react';
 import { useToast } from '../context/ToastContext';
 import ActionMenu from '../components/ActionMenu';
 import Modal from '../components/Modal';
@@ -25,8 +25,11 @@ const Clients = () => {
     const [statusFilter, setStatusFilter] = useState('all');
     const [planFilter, setPlanFilter] = useState('all');
     const [plans, setPlans] = useState([]);
+    // Group memberships with a free seat, so a second partner can be seated on
+    // an existing couple plan rather than starting a second membership.
+    const [memberships, setMemberships] = useState([]);
     const [formData, setFormData] = useState({
-        name: '', email: '', phone: '', joiningDate: new Date().toISOString().split('T')[0], billingRenewalDate: new Date().toISOString().split('T')[0], gender: 'male', planId: '', address: '', customFields: {}
+        name: '', email: '', phone: '', joiningDate: new Date().toISOString().split('T')[0], billingRenewalDate: new Date().toISOString().split('T')[0], gender: 'male', planId: '', partnerIds: [], address: '', customFields: {}
     });
 
     const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -63,6 +66,11 @@ const Clients = () => {
             ]);
             setClients(clientsRes.data);
             setPlans(plansRes.data);
+            // Non-fatal: the member form still works without it, just without
+            // the option to join an existing membership.
+            api.get('/memberships', { params: { groupsOnly: true } })
+                .then((r) => setMemberships(r.data))
+                .catch(() => setMemberships([]));
 
             // Create a map of clientId -> true for quick lookup
             const attendance = {};
@@ -88,7 +96,7 @@ const Clients = () => {
 
         setIsEditMode(false);
         const today = new Date().toISOString().split('T')[0];
-        setFormData({ name: '', email: '', phone: '', joiningDate: today, billingRenewalDate: today, gender: 'male', planId: '', address: '', customFields: {} });
+        setFormData({ name: '', email: '', phone: '', joiningDate: today, billingRenewalDate: today, gender: 'male', planId: '', partnerIds: [], address: '', customFields: {} });
         setShowModal(true);
     };
 
@@ -119,6 +127,8 @@ const Clients = () => {
             billingRenewalDate: client.billingRenewalDate || client.joiningDate || new Date().toISOString().split('T')[0],
             gender: client.gender || 'male',
             planId: client.planId || '',
+            // Members already sharing this member's membership.
+            partnerIds: [],
             address: client.address || '',
             customFields: client.customFields || {}
         });
@@ -253,6 +263,38 @@ const Clients = () => {
         }
     };
 
+    // The plan chosen on the form, and how many members it covers. A capacity
+    // above one means this is a couple/group plan, so the admin has to say
+    // whether this member starts a new membership or joins an existing one.
+    const selectedPlan = plans.find((p) => String(p.id) === String(formData.planId)) || null;
+    const selectedCapacity = selectedPlan?.memberCapacity || 1;
+    const isGroupPlan = selectedCapacity > 1;
+
+    // The membership the member being edited already belongs to, and who else is
+    // on it. Drives the "already sharing with" list so the form shows the
+    // current state rather than only offering to change it.
+    const editingMembership = isEditMode
+        ? memberships.find((m) => (m.members || []).some((x) => x.id === currentClientId)) || null
+        : null;
+    const existingPartners = editingMembership
+        ? (editingMembership.members || []).filter((x) => x.id !== currentClientId)
+        : [];
+
+    // How many more people can be attached in this form.
+    const seatsToFill = Math.max(0, selectedCapacity - 1 - existingPartners.length);
+
+    // Who can be paired: members of this facility, excluding this one and anyone
+    // already on this membership. A member on a shared membership is excluded —
+    // pulling them out of one couple into another silently is not something a
+    // dropdown should do.
+    const pairableMembers = clients.filter((c) => {
+        if (c.id === currentClientId) return false;
+        if (existingPartners.some((p) => p.id === c.id)) return false;
+        const theirs = memberships.find((m) => (m.members || []).some((x) => x.id === c.id));
+        if (theirs && (theirs.members || []).length > 1) return false;
+        return true;
+    });
+
     const handleSubmit = async (e) => {
         e.preventDefault();
 
@@ -274,14 +316,49 @@ const Clients = () => {
 
 
         try {
+            // Send only the fields the client endpoints accept. Their schemas
+            // declare `.unknown(false)`, which rejects rather than strips, so a
+            // stray key fails the whole save — a leftover `membershipId` in form
+            // state broke every edit with `"membershipId" is not allowed`.
+            //
+            // Partners in particular are not part of this payload: attaching
+            // someone changes who is covered and who is billed, so it goes
+            // through the membership endpoint, which enforces capacity.
+            const CLIENT_FIELDS = [
+                'name', 'email', 'phone', 'gender', 'height', 'weight',
+                'joiningDate', 'billingRenewalDate', 'planId', 'aadhaar_number',
+                'address', 'customFields'
+            ];
+            const clientPayload = Object.fromEntries(
+                CLIENT_FIELDS
+                    .filter((k) => formData[k] !== undefined)
+                    .map((k) => [k, formData[k]])
+            );
+            const partnerIds = formData.partnerIds || [];
+            let membershipId;
+
             if (isEditMode) {
-                await api.put(`/clients/${currentClientId}`, formData);
+                await api.put(`/clients/${currentClientId}`, clientPayload);
+                membershipId = editingMembership?.id
+                    || clients.find((c) => c.id === currentClientId)?.membershipId;
             } else {
-                await api.post('/clients', formData);
+                const created = await api.post('/clients', clientPayload);
+                membershipId = created.data?.membershipId;
+            }
+
+            // `transfer` is safe to send: the picker only offers members who are
+            // either unattached or alone on their own membership, and the row
+            // says so before it is chosen.
+            for (const partnerId of partnerIds || []) {
+                if (!membershipId) break;
+                await api.post(`/memberships/${membershipId}/members`, {
+                    clientId: partnerId,
+                    transfer: true
+                });
             }
             setShowModal(false);
             const today = new Date().toISOString().split('T')[0];
-            setFormData({ name: '', email: '', phone: '', joiningDate: today, billingRenewalDate: today, gender: 'male', planId: '', address: '', customFields: {} });
+            setFormData({ name: '', email: '', phone: '', joiningDate: today, billingRenewalDate: today, gender: 'male', planId: '', partnerIds: [], address: '', customFields: {} });
             fetchClients();
             triggerDashboardRefresh();
             addToast(isEditMode ? 'Client updated successfully' : 'Client added successfully', 'success');
@@ -432,6 +509,22 @@ const Clients = () => {
                                         PT · {client.Plan.ptSessionsCount}/{client.Plan.ptSessionPeriod === 'monthly' ? 'mo' : 'wk'}
                                     </span>
                                 )}
+                                {(() => {
+                                    // Who else is on this member's membership. Named rather
+                                    // than counted, because "shared with Priya" answers the
+                                    // question the front desk actually asks.
+                                    if (!client.membershipId) return null;
+                                    const m = memberships.find((x) => x.id === client.membershipId);
+                                    if (!m || m.capacity <= 1) return null;
+                                    const others = (m.members || []).filter((x) => x.id !== client.id).map((x) => x.name);
+                                    return (
+                                        <span title={others.length ? `Shares this membership with ${others.join(', ')}` : 'Seats still free on this membership'}
+                                            style={{ fontSize: '0.62rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#10B981', background: 'rgba(16,185,129,0.12)', padding: '2px 7px', borderRadius: 999, whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                                            <Users size={10} />
+                                            {others.length ? `with ${others[0]}${others.length > 1 ? ` +${others.length - 1}` : ''}` : `${m.seatsRemaining} seat${m.seatsRemaining === 1 ? '' : 's'} free`}
+                                        </span>
+                                    );
+                                })()}
                             </div>
                         </div>
 
@@ -540,12 +633,81 @@ const Clients = () => {
                     <div className="form-grid">
                         <div className="input-group">
                             <label className="input-label">Plan</label>
-                            <select className="input-field" value={formData.planId} onChange={e => setFormData({ ...formData, planId: e.target.value })}>
+                            <select className="input-field" value={formData.planId}
+                                onChange={e => setFormData({ ...formData, planId: e.target.value, partnerIds: [] })}>
                                 <option value="">Select Plan</option>
                                 {plans.map(p => (
-                                    <option key={p.id} value={p.id}>{p.name} - ₹{p.price}</option>
+                                    <option key={p.id} value={p.id}>
+                                        {p.name} - ₹{p.price}{p.memberCapacity > 1 ? ` · ${p.memberCapacity} members` : ''}
+                                    </option>
                                 ))}
                             </select>
+                            {isGroupPlan && (
+                                <div style={{ marginTop: '0.75rem', padding: '0.9rem 1rem', borderRadius: 12, background: 'var(--bg-body)', border: '1px solid var(--border-color)' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: '0.15rem' }}>
+                                        <Users size={14} style={{ color: 'var(--primary)' }} />
+                                        <span style={{ fontWeight: 700, fontSize: '0.85rem' }}>Shared plan</span>
+                                        <span style={{ marginLeft: 'auto', fontSize: '0.72rem', fontWeight: 700, color: 'var(--primary)' }}>
+                                            {1 + existingPartners.length} of {selectedCapacity} covered
+                                        </span>
+                                    </div>
+                                    <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '0 0 0.7rem' }}>
+                                        This plan covers {selectedCapacity} people on one payment and one renewal date.
+                                        Choose who shares it with this member.
+                                    </p>
+
+                                    {existingPartners.length > 0 && (
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', marginBottom: '0.7rem' }}>
+                                            {existingPartners.map((p) => (
+                                                <span key={p.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.78rem', fontWeight: 600, padding: '4px 10px', borderRadius: 999, background: 'rgba(16,185,129,0.12)', color: '#10B981' }}>
+                                                    <Users size={11} /> {p.name}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    {seatsToFill === 0 ? (
+                                        <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: 0 }}>
+                                            All {selectedCapacity} places are taken. Remove someone to swap them out.
+                                        </p>
+                                    ) : (
+                                        Array.from({ length: seatsToFill }).map((_, idx) => (
+                                            <div key={idx} style={{ marginBottom: idx === seatsToFill - 1 ? 0 : '0.5rem' }}>
+                                                <select className="input-field"
+                                                    value={formData.partnerIds[idx] || ''}
+                                                    onChange={(e) => {
+                                                        const next = [...formData.partnerIds];
+                                                        if (e.target.value) next[idx] = Number(e.target.value);
+                                                        else next.splice(idx, 1);
+                                                        setFormData({ ...formData, partnerIds: next.filter(Boolean) });
+                                                    }}>
+                                                    <option value="">
+                                                        {seatsToFill > 1 ? `Choose member ${idx + 2} (optional)` : 'Choose the other member (optional)'}
+                                                    </option>
+                                                    {pairableMembers
+                                                        .filter((c) => !formData.partnerIds.includes(c.id) || formData.partnerIds[idx] === c.id)
+                                                        .map((c) => {
+                                                            const theirs = memberships.find((m) => (m.members || []).some((x) => x.id === c.id));
+                                                            const moving = c.planId && c.Plan ? ` — moves off ${c.Plan.name}` : '';
+                                                            return (
+                                                                <option key={c.id} value={c.id}>
+                                                                    {c.name} ({c.phone}){theirs ? '' : moving}
+                                                                </option>
+                                                            );
+                                                        })}
+                                                </select>
+                                            </div>
+                                        ))
+                                    )}
+
+                                    {formData.partnerIds.length > 0 && (
+                                        <p style={{ fontSize: '0.76rem', color: 'var(--warning, #F59E0B)', margin: '0.6rem 0 0' }}>
+                                            The selected member{formData.partnerIds.length > 1 ? 's' : ''} will move onto this
+                                            plan and give up whatever they held on their own.
+                                        </p>
+                                    )}
+                                </div>
+                            )}
                         </div>
                         <div className="input-group">
                             <label className="input-label">Phone Number</label>

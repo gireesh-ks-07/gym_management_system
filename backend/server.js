@@ -10,7 +10,19 @@ const crypto = require('crypto');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const cron = require('node-cron');
-const { sequelize, User, Facility, Client, Plan, Payment, SubscriptionPlan, Attendance, Notification, FacilityType, FacilityAutoPayEvent } = require('./models');
+const { sequelize, User, Facility, Client, Plan, Payment, SubscriptionPlan, Attendance, Notification, FacilityType, FacilityAutoPayEvent, Membership } = require('./models');
+// Memberships own the plan and billing cycle; the matching columns on Client are
+// a projection written only by applyMembershipToClients. See services/memberships.js.
+const {
+    applyMembershipToClients,
+    ensureMembershipForClient,
+    addMemberToMembership,
+    removeMemberFromMembership,
+    changeMembershipPlan,
+    listMemberships,
+    occupancy: membershipOccupancy,
+    capacityOf: planCapacityOf
+} = require('./services/memberships');
 const { Op } = require('sequelize');
 const { P, ROLES, isTrainerRole } = require('./config/permissions');
 const { S, validate } = require('./config/schemas');
@@ -740,55 +752,30 @@ const logAutoPayEvent = async (facility, eventType, subscriptionEntity = null, p
     });
 };
 
+// Recompute expiry and status for every membership, then project onto members.
+//
+// This used to walk Clients and count payments per client. On a shared plan that
+// marked the non-paying half of a couple `payment_due` in perpetuity — their
+// partner had made the one payment that covers them both. Both the term and the
+// payment history belong to the membership, so it is driven from there.
 const syncClientPlanStatuses = async (facilityId = null) => {
-    const backfillWhere = { planId: { [Op.ne]: null } };
-
-    if (facilityId) {
-        backfillWhere.facilityId = facilityId;
-    } else {
-        backfillWhere.facilityId = { [Op.ne]: null };
+    const where = facilityId ? { facilityId } : { facilityId: { [Op.ne]: null } };
+    const memberships = await Membership.findAll({ where });
+    for (const membership of memberships) {
+        await applyMembershipToClients(membership);
     }
 
-    const clientsMissingExpiry = await Client.findAll({
-        where: backfillWhere,
-        include: [Plan]
-    });
+    // A member holding a plan but no membership predates this system or was
+    // created by a path that did not go through the service. Adopt them into a
+    // membership of one so there is exactly one code path.
+    const orphanWhere = { planId: { [Op.ne]: null }, membershipId: null };
+    if (facilityId) orphanWhere.facilityId = facilityId;
+    else orphanWhere.facilityId = { [Op.ne]: null };
 
-    for (const client of clientsMissingExpiry) {
-        if (!client.Plan) {
-            const nextStatus = 'inactive';
-            const nextExpiry = null;
-            if (client.status !== nextStatus || client.planExpiresAt !== nextExpiry) {
-                client.planExpiresAt = nextExpiry;
-                client.status = nextStatus;
-                await client.save();
-            }
-            continue;
-        }
-
-        if (!client.billingRenewalDate) {
-            client.billingRenewalDate = toDateOnlyString(client.joiningDate || client.createdAt || new Date());
-        }
-
-        const expiryDate = calculateClientPlanExpiry(client.billingRenewalDate, client.Plan.duration);
-        if (!expiryDate) continue;
-
-        const paymentCount = await Payment.count({
-            where: { clientId: client.id, facilityId: client.facilityId }
-        });
-        const nextStatus = resolveClientStatusFromPaymentAndExpiry({
-            hasPayment: paymentCount > 0,
-            expiryDate
-        });
-
-        if (
-            client.status !== nextStatus ||
-            new Date(client.planExpiresAt || 0).getTime() !== expiryDate.getTime()
-        ) {
-            client.planExpiresAt = expiryDate;
-            client.status = nextStatus;
-            await client.save();
-        }
+    const orphans = await Client.findAll({ where: orphanWhere });
+    for (const client of orphans) {
+        const membership = await ensureMembershipForClient(client);
+        await applyMembershipToClients(membership);
     }
 };
 
@@ -1715,7 +1702,27 @@ app.post('/api/clients', authenticate, checkSubscriptionStatus, authorize(P.MEMB
             clientData.workoutPlans = Array.isArray(workoutPlans) ? workoutPlans : [];
         }
 
-        if (clientData.planId) {
+        // Joining an existing membership (the second half of a couple) takes
+        // precedence over a plan chosen on the form: the membership already has
+        // one, and it is the membership that is billed.
+        let joinTarget = null;
+        if (req.body.membershipId) {
+            joinTarget = await Membership.findOne({
+                where: { id: req.body.membershipId, facilityId: req.user.facilityId }
+            });
+            if (!joinTarget) return res.status(400).json({ message: 'Membership not found for this facility' });
+
+            const { used, capacity, plan } = await membershipOccupancy(joinTarget);
+            if (used >= capacity) {
+                return res.status(409).json({
+                    message: capacity === 1
+                        ? `"${plan?.name || 'That plan'}" is an individual plan and cannot be shared.`
+                        : `That membership is full (${used}/${capacity} members).`,
+                    code: 'MEMBERSHIP_FULL'
+                });
+            }
+            clientData.planId = joinTarget.planId;
+        } else if (clientData.planId) {
             // Scoped by facility: an unqualified findByPk let one facility
             // attach another's plan, which then drove billing dates, was copied
             // onto payment records, and — for a PT plan — handed over its
@@ -1724,16 +1731,24 @@ app.post('/api/clients', authenticate, checkSubscriptionStatus, authorize(P.MEMB
                 where: { id: clientData.planId, facilityId: req.user.facilityId }
             });
             if (!plan) return res.status(400).json({ message: 'Plan not found for this facility' });
-            {
-                const expiryDate = calculateClientPlanExpiry(clientData.billingRenewalDate, plan.duration);
-                if (expiryDate) {
-                    clientData.planExpiresAt = expiryDate;
-                    clientData.status = 'inactive';
-                }
-            }
         }
 
         const client = await Client.create(clientData);
+
+        // Every plan-holding member belongs to a membership — a membership of
+        // one for an individual plan. Expiry and status are computed there and
+        // projected back onto the member, so they are not set by hand here.
+        if (joinTarget) {
+            const joined = await addMemberToMembership(joinTarget, client);
+            if (!joined.ok) {
+                await client.destroy();
+                return res.status(joined.code).json({ message: joined.message });
+            }
+        } else if (client.planId) {
+            const membership = await ensureMembershipForClient(client);
+            await applyMembershipToClients(membership);
+        }
+        await client.reload();
 
         // Add Notification for Facility Admin
         await Notification.create({
@@ -1745,6 +1760,126 @@ app.post('/api/clients', authenticate, checkSubscriptionStatus, authorize(P.MEMB
         });
 
         res.json(client);
+    } catch (error) {
+        sendServerError(res, error);
+    }
+});
+
+// ============================================================================
+// MEMBERSHIPS — couple & group plans
+//
+// A membership holds a plan for one or more members. Reading one is reading
+// member data (MEMBERS_READ); seating or removing someone changes who is covered
+// and who is billed, so it takes MEMBERS_WRITE — the same authority as editing
+// the member record itself. Plan capacity is what caps the group, and is set on
+// the plan by an admin (PLANS_WRITE).
+// ============================================================================
+
+app.get('/api/memberships', authenticate, checkSubscriptionStatus, authorize(P.MEMBERS_READ), async (req, res) => {
+    try {
+        const memberships = await listMemberships(req.user.facilityId, {
+            groupsOnly: req.query.groupsOnly === 'true'
+        });
+        res.json(memberships.map((m) => ({
+            id: m.id,
+            planId: m.planId,
+            plan: m.Plan,
+            primaryClientId: m.primaryClientId,
+            billingRenewalDate: m.billingRenewalDate,
+            planExpiresAt: m.planExpiresAt,
+            status: m.status,
+            members: m.members || [],
+            capacity: planCapacityOf(m.Plan),
+            seatsRemaining: Math.max(0, planCapacityOf(m.Plan) - (m.members || []).length)
+        })));
+    } catch (error) {
+        sendServerError(res, error);
+    }
+});
+
+app.get('/api/memberships/:id', authenticate, checkSubscriptionStatus, authorize(P.MEMBERS_READ), async (req, res) => {
+    try {
+        const membership = await Membership.findOne({
+            where: { id: req.params.id, facilityId: req.user.facilityId },
+            include: [
+                { model: Plan },
+                { model: Client, as: 'members', attributes: ['id', 'name', 'phone', 'status', 'joiningDate'] }
+            ]
+        });
+        if (!membership) return res.status(404).json({ message: 'Membership not found' });
+        const { used, capacity } = await membershipOccupancy(membership);
+        res.json({ ...membership.toJSON(), capacity, used, seatsRemaining: Math.max(0, capacity - used) });
+    } catch (error) {
+        sendServerError(res, error);
+    }
+});
+
+// Seat an existing member on a membership. Body: { clientId }
+app.post('/api/memberships/:id/members', authenticate, checkSubscriptionStatus, authorize(P.MEMBERS_WRITE), async (req, res) => {
+    try {
+        const membership = await Membership.findOne({
+            where: { id: req.params.id, facilityId: req.user.facilityId }
+        });
+        if (!membership) return res.status(404).json({ message: 'Membership not found' });
+
+        const client = await Client.findOne({
+            where: { id: req.body.clientId, facilityId: req.user.facilityId }
+        });
+        if (!client) return res.status(404).json({ message: 'Member not found' });
+
+        // `transfer` moves a member who already holds their own membership. The
+        // admin picked this person deliberately from the partner list, which
+        // states that they will move, so it is an explicit act rather than a
+        // silent side effect.
+        const result = await addMemberToMembership(membership, client, {
+            transfer: req.body.transfer === true || req.body.transfer === 'true'
+        });
+        if (!result.ok) return res.status(result.code).json({ message: result.message });
+
+        const { used, capacity } = await membershipOccupancy(membership);
+        res.json({ message: 'Member added to membership', membershipId: membership.id, used, capacity });
+    } catch (error) {
+        sendServerError(res, error);
+    }
+});
+
+// Remove a member from a membership. Their plan cover ends; the rest keep theirs.
+app.delete('/api/memberships/:id/members/:clientId', authenticate, checkSubscriptionStatus, authorize(P.MEMBERS_WRITE), async (req, res) => {
+    try {
+        const membership = await Membership.findOne({
+            where: { id: req.params.id, facilityId: req.user.facilityId }
+        });
+        if (!membership) return res.status(404).json({ message: 'Membership not found' });
+
+        const client = await Client.findOne({
+            where: { id: req.params.clientId, facilityId: req.user.facilityId, membershipId: membership.id }
+        });
+        if (!client) return res.status(404).json({ message: 'Member is not on this membership' });
+
+        await removeMemberFromMembership(client);
+        const { used, capacity } = await membershipOccupancy(membership);
+        res.json({ message: 'Member removed from membership', used, capacity });
+    } catch (error) {
+        sendServerError(res, error);
+    }
+});
+
+// Move a membership onto a different plan. Body: { planId }
+app.put('/api/memberships/:id/plan', authenticate, checkSubscriptionStatus, authorize(P.MEMBERS_WRITE), async (req, res) => {
+    try {
+        const membership = await Membership.findOne({
+            where: { id: req.params.id, facilityId: req.user.facilityId }
+        });
+        if (!membership) return res.status(404).json({ message: 'Membership not found' });
+
+        const plan = await Plan.findOne({
+            where: { id: req.body.planId, facilityId: req.user.facilityId }
+        });
+        if (!plan) return res.status(400).json({ message: 'Plan not found for this facility' });
+
+        const result = await changeMembershipPlan(membership, plan);
+        if (!result.ok) return res.status(result.code).json({ message: result.message });
+        res.json({ message: 'Membership plan updated', membershipId: membership.id, planId: plan.id });
     } catch (error) {
         sendServerError(res, error);
     }
@@ -1814,15 +1949,22 @@ app.get('/api/staff', authenticate, checkSubscriptionStatus, authorize(P.STAFF_M
 // both normal plans (PT fields cleared) and PT plans (validated allowance).
 const normalizePlanTypeFields = (body) => {
     const planType = body.planType === 'pt' ? 'pt' : 'normal';
+    const rawCapacity = parseInt(body.memberCapacity, 10);
+    const memberCapacity = Number.isFinite(rawCapacity) && rawCapacity > 0 ? rawCapacity : 1;
+
     if (planType !== 'pt') {
-        return { planType: 'normal', ptSessionsCount: null, ptSessionPeriod: null };
+        return { planType: 'normal', ptSessionsCount: null, ptSessionPeriod: null, memberCapacity };
     }
     const count = parseInt(body.ptSessionsCount, 10);
     const period = body.ptSessionPeriod === 'monthly' ? 'monthly' : 'weekly';
     return {
         planType: 'pt',
         ptSessionsCount: Number.isFinite(count) && count > 0 ? count : null,
-        ptSessionPeriod: period
+        ptSessionPeriod: period,
+        // Personal training is delivered one-to-one, so a PT plan always covers
+        // exactly one member however the form was filled in. Silently seating a
+        // couple on one PT allowance would hand out double the coaching sold.
+        memberCapacity: 1
     };
 };
 
@@ -1865,7 +2007,30 @@ app.put('/api/plans/:id', authenticate, checkSubscriptionStatus, authorize(P.PLA
         plan.ptSessionsCount = ptFields.ptSessionsCount;
         plan.ptSessionPeriod = ptFields.ptSessionPeriod;
 
+        // Reducing capacity below what a live membership already seats would
+        // leave a couple over-seated on a plan that no longer covers them both.
+        // Refuse and name the offender rather than silently under-covering them.
+        if (ptFields.memberCapacity < plan.memberCapacity) {
+            const memberships = await Membership.findAll({
+                where: { planId: plan.id },
+                include: [{ model: Client, as: 'members', attributes: ['id'] }]
+            });
+            const worst = memberships.reduce((max, m) => Math.max(max, (m.members || []).length), 0);
+            if (worst > ptFields.memberCapacity) {
+                return res.status(409).json({
+                    message: `Cannot reduce capacity to ${ptFields.memberCapacity}: a membership on this plan has ${worst} members. Remove members from it first.`,
+                    code: 'PLAN_CAPACITY_IN_USE'
+                });
+            }
+        }
+        plan.memberCapacity = ptFields.memberCapacity;
+
         await plan.save();
+
+        // Term or capacity may have moved; recompute every membership on it.
+        const affected = await Membership.findAll({ where: { planId: plan.id } });
+        for (const m of affected) await applyMembershipToClients(m);
+
         res.json(plan);
     } catch (error) {
         sendServerError(res, error);
@@ -2032,7 +2197,10 @@ app.post('/api/payments', authenticate, checkSubscriptionStatus, authorize(P.PAY
                     processedBy: req.user.id,
                     facilityId: req.user.facilityId,
                     invoiceNumber: newInvoiceNumber(),
-                    planId: client.planId || null
+                    planId: client.planId || null,
+                    // A payment settles the membership, so one payment from
+                    // either partner covers a couple. clientId stays the payer.
+                    membershipId: client.membershipId || null
                 });
                 break;
             } catch (err) {
@@ -2042,24 +2210,31 @@ app.post('/api/payments', authenticate, checkSubscriptionStatus, authorize(P.PAY
             }
         }
 
-        // Activate client and set expiry
+        // Roll the billing cycle forward and reactivate — on the membership, so
+        // both halves of a couple are covered by the single payment that was
+        // just recorded. Doing this per client left the non-paying partner
+        // sitting at payment_due despite their membership being paid for.
         {
             const normalizedBillingDate = toDateOnlyString(date || new Date());
-            if (normalizedBillingDate) {
-                client.billingRenewalDate = normalizedBillingDate;
-            }
-            // Calculate expiry based on plan duration
-            if (client.Plan) {
-                const durationMonths = client.Plan.duration;
-                const expiryDate = calculateClientPlanExpiry(client.billingRenewalDate, durationMonths);
-                if (expiryDate) {
-                    client.planExpiresAt = expiryDate;
-                    client.status = expiryDate < new Date() ? 'payment_due' : 'active';
+            const membership = client.membershipId
+                ? await Membership.findByPk(client.membershipId)
+                : await ensureMembershipForClient(client);
+
+            if (membership) {
+                if (normalizedBillingDate) membership.billingRenewalDate = normalizedBillingDate;
+                await membership.save();
+                // Backfill the link when the payment predated the membership.
+                if (payment && !payment.membershipId) {
+                    payment.membershipId = membership.id;
+                    await payment.save();
                 }
+                await applyMembershipToClients(membership);
+                await client.reload();
             } else {
+                // No plan at all: nothing to date, but the payment still lands.
                 client.status = 'active';
+                await client.save();
             }
-            await client.save();
         }
 
         // Gamification: award on-time payment XP (idempotent per payment).
@@ -2571,29 +2746,49 @@ app.put('/api/clients/:id', authenticate, checkSubscriptionStatus, authorize(P.M
 
         const planChanged = oldPlanId !== client.planId;
 
+        // Plan and billing belong to the membership, not the member. Set them
+        // there and let the projection come back, or a member sharing a couple
+        // plan could be moved onto a different plan than their partner while
+        // both still pointed at one membership.
         if (client.planId) {
             const plan = await Plan.findOne({
                 where: { id: client.planId, facilityId: req.user.facilityId }
             });
             if (!plan) return res.status(400).json({ message: 'Plan not found for this facility' });
-            {
-                const expiryDate = calculateClientPlanExpiry(client.billingRenewalDate, plan.duration);
-                if (expiryDate) {
-                    client.planExpiresAt = expiryDate;
-                    const hasPayment = await Payment.count({
-                        where: { clientId: client.id, facilityId: req.user.facilityId }
-                    });
-                    client.status = resolveClientStatusFromPaymentAndExpiry({
-                        hasPayment: hasPayment > 0,
-                        expiryDate
+
+            if (planChanged && client.membershipId) {
+                const sharedWith = await Client.count({
+                    where: { membershipId: client.membershipId, id: { [Op.ne]: client.id } }
+                });
+                if (sharedWith > 0) {
+                    return res.status(409).json({
+                        message: 'This member shares a membership with someone else. Change the plan for the whole membership, or remove them from it first.',
+                        code: 'MEMBERSHIP_SHARED'
                     });
                 }
             }
-        } else if (!client.planId && planChanged) {
+        }
+
+        await client.save();
+
+        const membership = client.planId
+            ? await ensureMembershipForClient(client, { planId: client.planId })
+            : (client.membershipId ? await Membership.findByPk(client.membershipId) : null);
+
+        if (membership) {
+            membership.planId = client.planId || null;
+            if (Object.prototype.hasOwnProperty.call(req.body, 'billingRenewalDate') || !membership.billingRenewalDate) {
+                membership.billingRenewalDate = client.billingRenewalDate || null;
+            }
+            await membership.save();
+            await applyMembershipToClients(membership);
+            await client.reload();
+        } else if (planChanged) {
             client.planExpiresAt = null;
             client.status = 'inactive';
+            await client.save();
         }
-        await client.save();
+
         res.json(client);
     } catch (error) {
         sendServerError(res, error);
@@ -3244,13 +3439,22 @@ app.post('/api/clients/:id/weekly-weight', authenticate, checkSubscriptionStatus
 
 app.put('/api/staff/:id', authenticate, checkSubscriptionStatus, authorize(P.STAFF_MANAGE), async (req, res) => {
     try {
-        const { name, email } = req.body;
+        const { name, email, qualification, registrationNumber } = req.body;
         const staff = await User.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId, role: { [Op.in]: ['staff', 'dietician'] } } });
 
         if (!staff) return res.status(404).json({ message: 'Staff member not found' });
 
         staff.name = name;
         staff.email = email;
+        // The Staff page has always sent `phone` on edit, but this handler never
+        // read it, so edits to a staff phone number were silently discarded.
+        if ('phone' in req.body) staff.phone = req.body.phone || null;
+        // Professional credentials print on the diet-chart PDF header and above
+        // the signature. Only a dietician carries them; blanks clear the field.
+        if (staff.role === 'dietician') {
+            if ('qualification' in req.body) staff.qualification = qualification || null;
+            if ('registrationNumber' in req.body) staff.registrationNumber = registrationNumber || null;
+        }
         await staff.save();
         res.json(staff);
     } catch (error) {

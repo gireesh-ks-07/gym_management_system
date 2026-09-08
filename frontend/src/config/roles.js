@@ -98,6 +98,22 @@ export const canAuthorDietPlan = (role) =>
     [SUPERADMIN, ADMIN, DIETICIAN].includes(role);
 
 /**
+ * May this role download the letterheaded PDF? Mirrors the backend
+ * CHART_EXPORT capability. Issuing the signed clinical document is the
+ * practitioner's or the owner's act, so staff — who may read the chart on
+ * screen — do not get the button.
+ */
+export const canExportDietChart = (role) =>
+    [SUPERADMIN, ADMIN, DIETICIAN].includes(role);
+
+/**
+ * Who may edit the facility letterhead printed on generated documents.
+ * Mirrors LETTERHEAD_MANAGE; dieticians can see it but not change it.
+ */
+export const canManageLetterhead = (role) =>
+    [SUPERADMIN, ADMIN].includes(role);
+
+/**
  * A facility whose subscription has lapsed locks its staff out of everything
  * except their landing page. Applies to every facility role — a dietician of a
  * suspended gym must see the same block screen as its admin, rather than a

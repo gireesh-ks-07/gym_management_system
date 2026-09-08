@@ -23,19 +23,34 @@ const phone = Joi.string().pattern(/^\d{10}$/).messages({
 // path had none at all.
 const password = Joi.string().min(6).max(128);
 
+// Structure only — local@domain.tld — with the TLD registry check off.
+//
+// Joi's default email() validates the TLD against the IANA list, which rejects
+// reserved test domains (RFC 2606: .test, .example, .invalid, .localhost) and
+// any TLD newer than the bundled list. That made 22 of the 23 seeded members
+// unsaveable: editing anyone on a @….test address failed with `"email" must be
+// a valid email` before a single field was written. This application is not the
+// DNS registry; deliverability is not something a form can establish anyway.
+const email = Joi.string().email({ tlds: { allow: false } });
+
 const money = Joi.number().positive().precision(2).max(10000000);
 const id = Joi.number().integer().positive();
+// Optional foreign key coming from a form. An unselected <select> submits '',
+// which Joi's number conversion rejects — adding a member with no plan chosen
+// failed with `"planId" must be a number`. `.empty('')` reads '' as "not
+// provided" so the field is simply absent.
+const optionalId = Joi.number().integer().positive().allow(null).empty('');
 const dateish = Joi.date();
 
 const schemas = {
     // --- Credentials ---
     login: Joi.object({
-        email: Joi.string().email().required(),
+        email: email.required(),
         password: Joi.string().min(1).required()
     }),
 
     clientLogin: Joi.object({
-        email: Joi.string().email(),
+        email,
         phone,
         password: Joi.string().min(1).required()
     }).or('email', 'phone'),
@@ -48,13 +63,16 @@ const schemas = {
     createClient: Joi.object({
         name: Joi.string().trim().min(1).max(120).required(),
         phone: phone.required(),
-        email: Joi.string().email().allow('', null),
+        email: email.allow('', null),
         gender: Joi.string().valid('male', 'female', 'other').required(),
         height: Joi.number().positive().max(300).allow(null),
         weight: Joi.number().positive().max(500).allow(null),
         joiningDate: dateish.allow(null),
         billingRenewalDate: dateish.allow(null),
-        planId: id.allow(null),
+        planId: optionalId,
+        // Seat this member on an existing membership (the second half of a
+        // couple, a third family member). Capacity is enforced server-side.
+        membershipId: optionalId,
         aadhaar_number: Joi.string().pattern(/^\d{12}$/).allow('', null)
             .messages({ 'string.pattern.base': 'Aadhaar number must be 12 digits' }),
         address: Joi.string().max(500).allow('', null),
@@ -67,13 +85,13 @@ const schemas = {
     updateClient: Joi.object({
         name: Joi.string().trim().min(1).max(120),
         phone,
-        email: Joi.string().email().allow('', null),
+        email: email.allow('', null),
         gender: Joi.string().valid('male', 'female', 'other'),
         height: Joi.number().positive().max(300).allow(null),
         weight: Joi.number().positive().max(500).allow(null),
         joiningDate: dateish.allow(null),
         billingRenewalDate: dateish.allow(null),
-        planId: id.allow(null),
+        planId: optionalId,
         aadhaar_number: Joi.string().pattern(/^\d{12}$/).allow('', null),
         address: Joi.string().max(500).allow('', null),
         customFields: Joi.object().unknown(true),
@@ -84,7 +102,7 @@ const schemas = {
 
     createStaff: Joi.object({
         name: Joi.string().trim().min(1).max(120).required(),
-        email: Joi.string().email().required(),
+        email: email.required(),
         password: password.required(),
         role: Joi.string().valid('staff', 'dietician'),
         phone: phone.allow('', null)
@@ -107,7 +125,11 @@ const schemas = {
         features: Joi.array().items(Joi.string().max(200)),
         planType: Joi.string().valid('normal', 'pt'),
         ptSessionsCount: Joi.number().integer().min(1).max(500).allow(null, ''),
-        ptSessionPeriod: Joi.string().valid('weekly', 'monthly').allow(null, '')
+        ptSessionPeriod: Joi.string().valid('weekly', 'monthly').allow(null, ''),
+        // How many people one membership of this plan covers. 1 is individual.
+        // The upper bound is a sanity limit, not a business rule — a family or
+        // corporate plan of 20 is plausible, 500 is a typo.
+        memberCapacity: Joi.number().integer().min(1).max(20).allow(null, '')
     }).unknown(false)
 };
 

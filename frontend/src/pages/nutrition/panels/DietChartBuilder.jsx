@@ -6,7 +6,7 @@ import { nutritionApi } from '../../../api/nutrition';
 import {
     ArrowLeft, Save, ChevronDown, Plus, Trash2, Lock, Utensils,
     User, Activity, FlaskConical, HeartPulse, Dumbbell, Pill, Salad,
-    ClipboardList, CalendarCheck, Target, ListChecks, LineChart, AlertCircle, RefreshCw
+    ClipboardList, CalendarCheck, Target, ListChecks, LineChart, AlertCircle, RefreshCw, Download, Loader
 } from 'lucide-react';
 
 // ── Preset rows (mirroring the printed assessment template) ──────────────────
@@ -351,10 +351,11 @@ const mergeHealthIntoData = (data, hs) => {
 };
 
 // ── Main builder ─────────────────────────────────────────────────────────────
-const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => {
+const DietChartBuilder = ({ chartId, facilityId, readOnly = false, canExport = false, onBack }) => {
     const { addToast } = useToast();
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
+    const [downloading, setDownloading] = useState(false);
     const [clientName, setClientName] = useState('');
     const [clientId, setClientId] = useState(null);
     const [foods, setFoods] = useState([]);
@@ -695,6 +696,26 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
         { cal: 0, pro: 0 }
     );
 
+    // Export the saved chart. Deliberately blocked while the form is dirty: the
+    // PDF is built server-side from what is stored, so downloading mid-edit
+    // would hand out a document that does not match what is on screen.
+    const handleDownload = async () => {
+        setDownloading(true);
+        try {
+            const { blob, filename } = await dieticianApi.exportChartPdf(chartId, facilityId);
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.click();
+            window.URL.revokeObjectURL(url);
+        } catch (e) {
+            addToast(e.response?.data?.error || 'Failed to download PDF', 'error');
+        } finally {
+            setDownloading(false);
+        }
+    };
+
     return (
         <div>
             {/* Sticky header */}
@@ -736,6 +757,14 @@ const DietChartBuilder = ({ chartId, facilityId, readOnly = false, onBack }) => 
                             <option value="archived">Archived</option>
                         </select>
                     </div>
+                    {canExport && (
+                        <button className="btn btn-secondary" onClick={handleDownload} disabled={downloading || dirty}
+                            title={dirty ? 'Save your changes first — the PDF is generated from the saved chart' : 'Download the letterheaded PDF'}>
+                            {downloading
+                                ? <Loader size={15} style={{ animation: 'spinner 0.8s linear infinite' }} />
+                                : <Download size={15} />} PDF
+                        </button>
+                    )}
                     <button className="btn btn-primary" onClick={handleSave} disabled={saving}><Save size={17} /> {saving ? 'Saving…' : 'Save'}</button>
                 </div>
             </div>

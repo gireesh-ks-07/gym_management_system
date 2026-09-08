@@ -17,7 +17,7 @@ const Staff = () => {
     const [showModal, setShowModal] = useState(false);
     const [isEditMode, setIsEditMode] = useState(false);
     const [currentStaffId, setCurrentStaffId] = useState(null);
-    const [formData, setFormData] = useState({ name: '', email: '', password: '', role: 'staff', phone: '' });
+    const [formData, setFormData] = useState({ name: '', email: '', password: '', role: 'staff', phone: '', qualification: '', registrationNumber: '' });
     const { addToast, showConfirm } = useToast();
 
     const location = useLocation();
@@ -46,7 +46,7 @@ const Staff = () => {
         }
 
         setIsEditMode(false);
-        setFormData({ name: '', email: '', password: '', role: 'staff', phone: '' });
+        setFormData({ name: '', email: '', password: '', role: 'staff', phone: '', qualification: '', registrationNumber: '' });
         setShowModal(true);
     };
 
@@ -62,7 +62,7 @@ const Staff = () => {
     const handleEditClick = (s) => {
         setIsEditMode(true);
         setCurrentStaffId(s.id);
-        setFormData({ name: s.name, email: s.email, password: '', role: s.role || 'staff', phone: s.phone || '' });
+        setFormData({ name: s.name, email: s.email, password: '', role: s.role || 'staff', phone: s.phone || '', qualification: s.qualification || '', registrationNumber: s.registrationNumber || '' });
         setShowModal(true);
     };
 
@@ -110,14 +110,14 @@ const Staff = () => {
 
         try {
             if (isEditMode) {
-                await api.put(`/staff/${currentStaffId}`, { name: formData.name, email: formData.email, phone: formData.phone });
+                await api.put(`/staff/${currentStaffId}`, { name: formData.name, email: formData.email, phone: formData.phone, qualification: formData.qualification, registrationNumber: formData.registrationNumber });
                 addToast('Staff updated successfully', 'success');
             } else {
                 await api.post('/staff', formData);
                 addToast('Staff added successfully', 'success');
             }
             setShowModal(false);
-            setFormData({ name: '', email: '', password: '', role: 'staff', phone: '' });
+            setFormData({ name: '', email: '', password: '', role: 'staff', phone: '', qualification: '', registrationNumber: '' });
             fetchStaff();
             triggerDashboardRefresh();
         } catch (err) {
@@ -280,6 +280,26 @@ const Staff = () => {
                                 : 'Dieticians get a restricted login to manage diet charts for the members assigned to them. Only Staff can be assigned as trainers on PT sessions.'}
                         </p>
                     </div>
+                    {formData.role === 'dietician' && (
+                        <>
+                            <div className="input-group">
+                                <label className="input-label">Qualification</label>
+                                <input className="input-field" value={formData.qualification}
+                                    onChange={e => setFormData({ ...formData, qualification: e.target.value })}
+                                    placeholder="Ex. Clinical and HPA Sports Nutritionist" />
+                            </div>
+                            <div className="input-group">
+                                <label className="input-label">Registration Number</label>
+                                <input className="input-field" value={formData.registrationNumber}
+                                    onChange={e => setFormData({ ...formData, registrationNumber: e.target.value })}
+                                    placeholder="Ex. LM384-2011" />
+                                <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.4rem' }}>
+                                    Qualification and registration number are printed in the header of every
+                                    diet chart PDF this dietician issues, and above their signature. Both optional.
+                                </p>
+                            </div>
+                        </>
+                    )}
                     {!isEditMode && (
                         <div className="input-group">
                             <label className="input-label">Temporary Password</label>

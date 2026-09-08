@@ -53,6 +53,13 @@ const PERMISSIONS = {
     HEALTH_WRITE: [ADMIN, STAFF],
     WORKOUTS_WRITE: [ADMIN, STAFF],
 
+    // --- Facility identity ---
+    // The letterhead block printed on generated documents (diet-chart PDF).
+    // Facility-level branding, so it belongs to whoever runs the facility, not
+    // to the practitioner whose name appears above it.
+    LETTERHEAD_READ: [SUPERADMIN, ADMIN, DIETICIAN],
+    LETTERHEAD_MANAGE: [SUPERADMIN, ADMIN],
+
     // --- Staff & membership plans ---
     STAFF_MANAGE: [ADMIN],
     PLANS_WRITE: [ADMIN],
@@ -98,6 +105,11 @@ const PERMISSIONS = {
     // read and health-section edit access (CHART_READ / CHART_EDIT) but cannot
     // destroy a plan a dietician authored.
     CHART_DELETE: [SUPERADMIN, ADMIN, DIETICIAN],
+    // Exporting the signed, letterheaded PDF is issuing the clinical document,
+    // not reading it. Staff keep CHART_READ so they can answer "what is my plan
+    // again?" at the desk, but the practitioner and the facility owner are the
+    // ones who hand out a document carrying a registration number.
+    CHART_EXPORT: [SUPERADMIN, ADMIN, DIETICIAN],
 
     // --- Member (client app) ---
     CLIENT_APP: [CLIENT]

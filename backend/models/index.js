@@ -50,6 +50,12 @@ const User = sequelize.define('User', {
         defaultValue: 'staff'
     },
     phone: { type: DataTypes.STRING, allowNull: true },
+    // Professional credentials, printed in the diet-chart PDF header and above
+    // the signature. Only meaningful for clinical roles (dietician); nullable
+    // everywhere else. Declared here as well as in the migration, or Sequelize
+    // would neither select nor persist them.
+    qualification: { type: DataTypes.STRING, allowNull: true },
+    registrationNumber: { type: DataTypes.STRING, allowNull: true },
 });
 
 // SaaS Subscription Plan (For Facilities)
@@ -83,6 +89,12 @@ const Facility = sequelize.define('Facility', {
         allowNull: false
     },
     address: { type: DataTypes.STRING, allowNull: true },
+    // Letterhead block for generated documents (diet-chart PDF footer). All
+    // optional — a facility that leaves them blank just gets fewer footer lines.
+    tagline: { type: DataTypes.STRING, allowNull: true },
+    email: { type: DataTypes.STRING, allowNull: true },
+    phone: { type: DataTypes.STRING, allowNull: true },
+    logoUrl: { type: DataTypes.TEXT, allowNull: true },
     subscriptionStatus: {
         type: DataTypes.ENUM('active', 'pending', 'blocked', 'suspended', 'expired'),
         defaultValue: 'active'
@@ -138,7 +150,10 @@ const Client = sequelize.define('Client', {
     workoutPlans: { type: DataTypes.JSON, defaultValue: [] },
     // Dietician assigned to this member (nullable). Set by admins; scopes which
     // clients a dietician can see and create diet charts for.
-    dieticianId: { type: DataTypes.INTEGER, allowNull: true }
+    dieticianId: { type: DataTypes.INTEGER, allowNull: true },
+    // The membership this member belongs to. planId / billingRenewalDate /
+    // planExpiresAt / status above are a projection of that membership.
+    membershipId: { type: DataTypes.INTEGER, allowNull: true }
 }, {
     indexes: [
         // Without these, two members in one facility could share a phone number,
@@ -189,7 +204,10 @@ const Payment = sequelize.define('Payment', {
     // accounting problem, and the constraint turns a silent duplicate into a
     // loud failure the caller retries.
     invoiceNumber: { type: DataTypes.STRING, allowNull: true, unique: true },
-    planId: { type: DataTypes.INTEGER, allowNull: true }        // Plan at time of payment
+    planId: { type: DataTypes.INTEGER, allowNull: true },       // Plan at time of payment
+    // A payment settles a membership, not a person — one payment covers a
+    // couple. clientId stays as the payer; this is what the status check counts.
+    membershipId: { type: DataTypes.INTEGER, allowNull: true }
 });
 
 const Plan = sequelize.define('Plan', {
@@ -212,6 +230,39 @@ const Plan = sequelize.define('Plan', {
     ptSessionPeriod: {
         type: DataTypes.ENUM('weekly', 'monthly'),
         allowNull: true
+    },
+    // How many people one membership of this plan covers. 1 is an individual
+    // plan and is the default, so existing plans are unaffected. Only 'normal'
+    // plans may exceed 1 — personal training is delivered one-to-one, so a PT
+    // plan is always single-member (enforced in normalizePlanTypeFields).
+    memberCapacity: {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+        defaultValue: 1
+    }
+});
+
+// A membership is the thing that actually holds a plan. One or more Clients
+// belong to it, which is what lets a couple share one renewal date and one
+// payment — pointing two Clients at the same Plan row never could, because the
+// billing cycle lived on each Client independently.
+//
+// This row is the source of truth for plan and billing. The matching columns on
+// Client are a projection of it, written only by applyMembershipToClients in
+// services/memberships.js, so the ~90 existing read sites and both Flutter apps
+// keep working unchanged.
+const Membership = sequelize.define('Membership', {
+    facilityId: { type: DataTypes.INTEGER, allowNull: false },
+    planId: { type: DataTypes.INTEGER, allowNull: true },
+    // The member carrying the billing relationship. Nullable so the membership
+    // survives that member being removed — the service promotes another.
+    primaryClientId: { type: DataTypes.INTEGER, allowNull: true },
+    billingRenewalDate: { type: DataTypes.DATEONLY, allowNull: true },
+    planExpiresAt: { type: DataTypes.DATE, allowNull: true },
+    status: {
+        type: DataTypes.ENUM('active', 'inactive', 'payment_due'),
+        allowNull: false,
+        defaultValue: 'inactive'
     }
 });
 
@@ -302,6 +353,24 @@ Plan.belongsTo(Facility, { foreignKey: 'facilityId' });
 
 Plan.hasMany(Client, { foreignKey: 'planId' });
 Client.belongsTo(Plan, { foreignKey: 'planId' });
+
+// --- Memberships ---
+Facility.hasMany(Membership, { foreignKey: 'facilityId' });
+Membership.belongsTo(Facility, { foreignKey: 'facilityId' });
+
+Plan.hasMany(Membership, { foreignKey: 'planId' });
+Membership.belongsTo(Plan, { foreignKey: 'planId' });
+
+// The members sharing this membership.
+Membership.hasMany(Client, { as: 'members', foreignKey: 'membershipId' });
+Client.belongsTo(Membership, { foreignKey: 'membershipId' });
+
+// The billing contact. Separate association from `members` — it is one of them,
+// but named so callers do not have to guess which.
+Membership.belongsTo(Client, { as: 'primaryClient', foreignKey: 'primaryClientId', constraints: false });
+
+Membership.hasMany(Payment, { foreignKey: 'membershipId' });
+Payment.belongsTo(Membership, { foreignKey: 'membershipId' });
 
 Client.hasMany(Attendance, { foreignKey: 'clientId' });
 Attendance.belongsTo(Client, { foreignKey: 'clientId' });
@@ -399,7 +468,7 @@ const ptModels = definePTModels(sequelize, { Client, Facility, User });
 
 module.exports = {
     sequelize,
-    User, Facility, Client, Payment, Plan, SubscriptionPlan,
+    User, Facility, Client, Payment, Plan, SubscriptionPlan, Membership,
     Attendance, Notification, FacilityType, FacilityAutoPayEvent,
     NOTIFICATION_AUDIENCES,
     ...gamificationModels,
