@@ -52,6 +52,22 @@ pm2 startOrReload deploy/ecosystem.config.js --update-env
 pm2 save
 
 say "Health check"
-sleep 3
-curl -fsS "http://127.0.0.1:3000/api/health?db=1" && echo
+# Boot is not instant: the server seeds gamification defaults and generates
+# scheduled challenges before it listens. A flat sleep reports failure against a
+# perfectly healthy server, so poll instead.
+for attempt in $(seq 1 30); do
+    # --max-time matters: without it a stalled connection hangs the loop
+    # well past its 60s budget instead of failing the attempt.
+    if curl -fsS --max-time 5 "http://127.0.0.1:3000/api/health?db=1" 2>/dev/null; then
+        echo
+        pm2 status facility-api
+        exit 0
+    fi
+    sleep 2
+done
+
+echo "API did not answer on 127.0.0.1:3000 within 60s." >&2
 pm2 status facility-api
+echo "--- last 40 log lines ---" >&2
+pm2 logs facility-api --lines 40 --nostream >&2
+exit 1

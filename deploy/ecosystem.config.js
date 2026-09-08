@@ -1,8 +1,10 @@
 // pm2 process definition for the API.
 //
-// The script is `npm start`, not `node server.js`, deliberately: package.json's
-// prestart hook runs the migrations, so a restart can never boot a server
-// against a schema older than its code.
+// Runs `node server.js` in fork mode, not `npm start` in cluster mode. Cluster
+// mode expects a Node entry point and cannot manage an npm wrapper: it swallows
+// the child's stdout, so a crash leaves nothing in the logs but npm's own
+// banner. Migrations still run before every boot — release.sh executes them
+// explicitly, ahead of this process being (re)started.
 const path = require('path');
 
 module.exports = {
@@ -10,12 +12,12 @@ module.exports = {
         {
             name: 'facility-api',
             cwd: path.resolve(__dirname, '..', 'backend'),
-            script: 'npm',
-            args: 'start',
+            script: 'server.js',
             env: {
                 NODE_ENV: 'production'
             },
-            instances: 1,          // node-cron jobs in server.js must not run twice
+            exec_mode: 'fork',     // node-cron jobs in server.js must not run twice
+            instances: 1,
             autorestart: true,
             max_memory_restart: '600M',
             // Back off instead of hammering a database that is refusing
