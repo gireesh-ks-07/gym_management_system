@@ -1,5 +1,7 @@
-const { PTSession, Client, Plan, User, Notification } = require('../models');
+const { PTSession, Client, Plan, User, Notification, Attendance } = require('../models');
+const gamification = require('../gamification/engine');
 const { Op, fn, col } = require('sequelize');
+const { P, isTrainerRole } = require('../config/permissions');
 
 // ==========================================================================
 // Period / usage helpers
@@ -40,12 +42,13 @@ const getPeriodWindow = (period, reference = new Date()) => {
 
 // Count completed sessions for a client within a given window, optionally
 // excluding one session (used when re-validating an update).
-const countCompletedInWindow = async (clientId, window, excludeId = null) => {
+const countCompletedInWindow = async (clientId, window, excludeId = null, facilityId = null) => {
     const where = {
         clientId,
         status: 'completed',
         sessionDate: { [Op.gte]: window.start, [Op.lt]: window.end }
     };
+    if (facilityId) where.facilityId = facilityId;
     if (excludeId) where.id = { [Op.ne]: excludeId };
     return PTSession.count({ where });
 };
@@ -56,7 +59,7 @@ const buildUsage = async (client, plan, reference = new Date()) => {
     const period = plan.ptSessionPeriod || 'weekly';
     const allowed = plan.ptSessionsCount || 0;
     const window = getPeriodWindow(period, reference);
-    const used = await countCompletedInWindow(client.id, window);
+    const used = await countCompletedInWindow(client.id, window, null, client.facilityId);
     return {
         planId: plan.id,
         planName: plan.name,
@@ -73,6 +76,32 @@ const buildUsage = async (client, plan, reference = new Date()) => {
 // Resolve the facility scope for the request (superadmin may pass ?facilityId).
 const facilityScope = (req) => req.user.facilityId;
 
+// Validate a trainerId supplied by a client. Returns { ok, trainerId } or
+// { ok: false, message }.
+//
+// Trainers are drawn from the facility's staff, but not *every* staff member is
+// a trainer — dieticians are staff too, and they do not deliver training. This
+// used to be unvalidated entirely, so whatever id the browser sent was stored
+// and rendered as the session's trainer: a dietician picked from the shared
+// /api/staff list, or a user id belonging to another facility altogether.
+const resolveTrainerId = async (rawTrainerId, facilityId) => {
+    if (rawTrainerId === null || rawTrainerId === undefined || rawTrainerId === '') {
+        return { ok: true, trainerId: null };
+    }
+    const trainerId = parseInt(rawTrainerId, 10);
+    if (!Number.isInteger(trainerId)) {
+        return { ok: false, message: 'Invalid trainer' };
+    }
+    const trainer = await User.findOne({ where: { id: trainerId, facilityId } });
+    if (!trainer) {
+        return { ok: false, message: 'Trainer not found in this facility' };
+    }
+    if (!isTrainerRole(trainer.role)) {
+        return { ok: false, message: `${trainer.name} cannot be assigned as a trainer` };
+    }
+    return { ok: true, trainerId };
+};
+
 // Only a member whose active plan is a PT plan is a "PT member".
 const getClientWithPTPlan = async (clientId, facilityId) => {
     const client = await Client.findOne({
@@ -87,6 +116,25 @@ const getClientWithPTPlan = async (clientId, facilityId) => {
 // ==========================================================================
 // ADMIN / TRAINER ENDPOINTS
 // ==========================================================================
+
+// GET /api/pt/trainers — the facility's trainer roster.
+//
+// Deliberately separate from /api/staff, which lists everyone the admin manages
+// (staff *and* dieticians) for the Staff page. Reusing that list here is what
+// made dieticians show up as trainers.
+exports.getTrainers = async (req, res) => {
+    try {
+        const facilityId = facilityScope(req);
+        const trainers = await User.findAll({
+            where: { facilityId, role: { [Op.in]: P.PT_TRAINER } },
+            attributes: ['id', 'name', 'email', 'role'],
+            order: [['name', 'ASC']]
+        });
+        res.json(trainers);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
 
 // GET /api/pt/members — every member on a PT plan, with current-period usage.
 exports.getPTMembers = async (req, res) => {
@@ -191,6 +239,9 @@ exports.createSession = async (req, res) => {
         if (error === 'not_found') return res.status(404).json({ message: 'Member not found' });
         if (error === 'not_pt') return res.status(400).json({ message: 'Member is not on a Personal Training plan' });
 
+        const trainer = await resolveTrainerId(trainerId, facilityId);
+        if (!trainer.ok) return res.status(400).json({ message: trainer.message });
+
         const requestedStatus = ['scheduled', 'completed', 'cancelled', 'no_show'].includes(status) ? status : 'scheduled';
         const when = new Date(sessionDate);
 
@@ -205,7 +256,7 @@ exports.createSession = async (req, res) => {
             facilityId,
             clientId,
             planId: plan.id,
-            trainerId: trainerId || null,
+            trainerId: trainer.trainerId,
             sessionDate: when,
             durationMinutes: durationMinutes || null,
             notes: notes || null,
@@ -214,6 +265,11 @@ exports.createSession = async (req, res) => {
             overrideUsed,
             createdBy: req.user.id
         });
+
+        if (requestedStatus === 'completed') {
+            await linkAttendance(session);
+            await session.save();
+        }
 
         await notifyMemberSession(session, client, requestedStatus);
 
@@ -237,29 +293,57 @@ exports.updateSession = async (req, res) => {
         if (!session) return res.status(404).json({ message: 'Session not found' });
 
         const { trainerId, sessionDate, durationMinutes, notes, status, override } = req.body;
+        const prevStatus = session.status;
         const nextStatus = status !== undefined ? status : session.status;
         const nextDate = sessionDate !== undefined ? new Date(sessionDate) : session.sessionDate;
 
-        // Enforce the limit only on a *transition into* completed (not when a
-        // session is already completed and merely being edited).
-        const becomingCompleted = nextStatus === 'completed' && session.status !== 'completed';
-        if (becomingCompleted) {
+        // Re-check the allowance when a session *becomes* completed, and also
+        // when an already-completed session is moved to a different date: the
+        // move can push it into a period that is already at its limit, which
+        // used to slip through unchecked and uncounted.
+        const becomingCompleted = nextStatus === 'completed' && prevStatus !== 'completed';
+        const movedWhileCompleted = nextStatus === 'completed' && prevStatus === 'completed'
+            && sessionDate !== undefined
+            && new Date(nextDate).getTime() !== new Date(session.sessionDate).getTime();
+
+        if (becomingCompleted || movedWhileCompleted) {
             const { client, plan, error } = await getClientWithPTPlan(session.clientId, facilityId);
             if (error) return res.status(400).json({ message: 'Member is no longer on a Personal Training plan' });
             const limit = await enforceLimit({ req, client, plan, sessionDate: nextDate, override, excludeId: session.id });
             if (!limit.ok) return res.status(limit.code).json({ message: limit.message, code: 'PT_LIMIT_REACHED', usage: limit.usage });
             session.overrideUsed = limit.overrideUsed;
-            session.completedAt = new Date();
+            if (becomingCompleted) session.completedAt = new Date();
         }
         if (nextStatus !== 'completed') session.completedAt = null;
 
-        if (trainerId !== undefined) session.trainerId = trainerId || null;
+        if (trainerId !== undefined) {
+            const trainer = await resolveTrainerId(trainerId, facilityId);
+            if (!trainer.ok) return res.status(400).json({ message: trainer.message });
+            session.trainerId = trainer.trainerId;
+        }
         if (sessionDate !== undefined) session.sessionDate = nextDate;
         if (durationMinutes !== undefined) session.durationMinutes = durationMinutes || null;
         if (notes !== undefined) session.notes = notes;
         session.status = nextStatus;
 
+        // Keep the attendance log in step with the session's state.
+        if (nextStatus === 'completed') {
+            // Re-link on a date move too, so the presence lands on the new day.
+            if (movedWhileCompleted) await unlinkAttendance(session);
+            await linkAttendance(session);
+        } else if (prevStatus === 'completed') {
+            await unlinkAttendance(session);
+        }
+
         await session.save();
+
+        // Tell the member when their session changes. This used to fire only on
+        // create, so cancellations, reschedules and no-shows — every one of
+        // which goes through this handler — reached them silently.
+        if (nextStatus !== prevStatus) {
+            const member = await Client.findByPk(session.clientId);
+            if (member) await notifyMemberSession(session, member, nextStatus);
+        }
 
         const full = await PTSession.findByPk(session.id, {
             include: [
@@ -279,6 +363,7 @@ exports.deleteSession = async (req, res) => {
         const facilityId = facilityScope(req);
         const session = await PTSession.findOne({ where: { id: req.params.id, facilityId } });
         if (!session) return res.status(404).json({ message: 'Session not found' });
+        await unlinkAttendance(session);
         await session.destroy();
         res.json({ success: true });
     } catch (err) {
@@ -390,13 +475,87 @@ exports.getClientPT = async (req, res) => {
 // Internal helpers (limit enforcement + notifications)
 // ==========================================================================
 
+// ==========================================================================
+// Attendance bridge
+// ==========================================================================
+//
+// A completed PT session means the member was physically at the facility, so it
+// must show up in the attendance log — and earn the same XP a door check-in
+// earns. Without this the two were independent ledgers: PT Reports counted N
+// completed sessions while the attendance log said the member never came in,
+// and PT members quietly fell down the gamification leaderboard because only
+// door check-ins awarded XP.
+
+const dateOnly = (d) => {
+    const dt = new Date(d);
+    return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+};
+
+// Mark the member present for the session's date. Reuses that day's existing
+// attendance row when there is one (the front desk may already have checked
+// them in) rather than creating a duplicate.
+async function linkAttendance(session) {
+    try {
+        const date = dateOnly(session.sessionDate);
+        let attendance = await Attendance.findOne({
+            where: { clientId: session.clientId, facilityId: session.facilityId, date }
+        });
+
+        if (!attendance) {
+            attendance = await Attendance.create({
+                clientId: session.clientId,
+                facilityId: session.facilityId,
+                date,
+                status: 'present',
+                source: 'pt_session',
+                checkInTime: new Date(session.sessionDate).toLocaleTimeString('en-US', { hour12: false })
+            });
+        }
+
+        session.attendanceId = attendance.id;
+
+        // Same award path as POST /api/attendance. Both rules are once_per_day,
+        // so a member who checks in at the door *and* completes a session on the
+        // same day is credited once, not twice.
+        gamification.awardActivity(session.clientId, session.facilityId,
+            [{ code: 'gym_attendance' }, { code: 'daily_checkin' }],
+            { sourceType: 'attendance', sourceId: attendance.id, date }
+        );
+
+        return attendance;
+    } catch (e) {
+        // Never fail the session write because attendance bookkeeping failed.
+        console.error('[pt] attendance link failed:', e.message);
+        return null;
+    }
+}
+
+// Undo the link when a session stops being completed, or is deleted. Only
+// removes the attendance row if this session raised it — a manual front-desk
+// check-in is left alone.
+async function unlinkAttendance(session) {
+    try {
+        if (!session.attendanceId) return;
+        const attendance = await Attendance.findByPk(session.attendanceId);
+        if (attendance && attendance.source === 'pt_session') {
+            const otherSessions = await PTSession.count({
+                where: { attendanceId: attendance.id, id: { [Op.ne]: session.id }, status: 'completed' }
+            });
+            if (otherSessions === 0) await attendance.destroy();
+        }
+        session.attendanceId = null;
+    } catch (e) {
+        console.error('[pt] attendance unlink failed:', e.message);
+    }
+}
+
 // Enforce the plan's per-period session limit. Returns { ok, code, message,
 // usage, overrideUsed }. An admin may pass override=true to bypass the cap.
 async function enforceLimit({ req, client, plan, sessionDate, override, excludeId = null }) {
     const period = plan.ptSessionPeriod || 'weekly';
     const allowed = plan.ptSessionsCount || 0;
     const window = getPeriodWindow(period, sessionDate);
-    const used = await countCompletedInWindow(client.id, window, excludeId);
+    const used = await countCompletedInWindow(client.id, window, excludeId, client.facilityId);
     const usage = { allowed, used, remaining: Math.max(0, allowed - used), period };
 
     if (allowed > 0 && used >= allowed) {
@@ -432,6 +591,7 @@ async function notifyMemberSession(session, client, status) {
         await Notification.create({
             message: messages[status] || `Your Personal Training session was updated.`,
             type: status === 'cancelled' || status === 'no_show' ? 'warning' : 'success',
+            audience: 'client',
             clientId: client.id,
             facilityId: session.facilityId,
             path: '/personal-training'

@@ -1,0 +1,144 @@
+/**
+ * The single place that answers "who may do what".
+ *
+ * Before this existed, role lists were written out by hand at every call site —
+ * `['admin', 'staff']` appeared in more than thirty places across server.js,
+ * four route registrars and five React files. Adding the `dietician` role meant
+ * updating all of them, and it was only updated in some: that drift is what
+ * produced the dietician-shows-as-trainer bug and the missing dietician read
+ * access to health profiles.
+ *
+ * Rules:
+ *   - Route gates take a capability from here, never a literal array.
+ *   - Name capabilities after the action, not the role, so the question a
+ *     reader asks ("may a dietician do X?") is answered in one place.
+ *   - Keep frontend/src/config/roles.js in step with this file.
+ */
+
+const ROLES = {
+    SUPERADMIN: 'superadmin',
+    ADMIN: 'admin',
+    STAFF: 'staff',
+    DIETICIAN: 'dietician',
+    CLIENT: 'client'
+};
+
+const { SUPERADMIN, ADMIN, STAFF, DIETICIAN, CLIENT } = ROLES;
+
+// Every role that belongs to a facility's staff (i.e. logs into the admin web
+// app rather than the member app).
+const FACILITY_STAFF = [ADMIN, STAFF, DIETICIAN];
+
+const PERMISSIONS = {
+    // --- Platform (super admin) ---
+    PLATFORM_MANAGE: [SUPERADMIN],
+
+    // --- Facility ---
+    // Reading subscription state gates the "facility suspended" screen, so
+    // every staff role needs it — including dieticians.
+    FACILITY_SUBSCRIPTION_READ: [SUPERADMIN, ADMIN, STAFF, DIETICIAN],
+    FACILITY_BILLING_MANAGE: [ADMIN],
+
+    // --- Members ---
+    MEMBERS_READ: [SUPERADMIN, ADMIN, STAFF],
+    MEMBERS_WRITE: [ADMIN, STAFF],
+
+    // --- Health profile & workout schedules ---
+    // Dieticians read a member's health profile and workout schedule so they can
+    // build a diet plan around the real training week. They never write it —
+    // programming stays with the trainer and admin (HEALTH_WRITE /
+    // WORKOUTS_WRITE). A dietician's read is further scoped in the handler to
+    // the members actually assigned to them.
+    HEALTH_READ: [ADMIN, STAFF, DIETICIAN],
+    HEALTH_WRITE: [ADMIN, STAFF],
+    WORKOUTS_WRITE: [ADMIN, STAFF],
+
+    // --- Staff & membership plans ---
+    STAFF_MANAGE: [ADMIN],
+    PLANS_WRITE: [ADMIN],
+    PLANS_READ: [SUPERADMIN, ADMIN, STAFF],
+
+    // --- Payments & attendance ---
+    PAYMENTS_READ: [ADMIN, STAFF],
+    PAYMENTS_WRITE: [ADMIN, STAFF],
+    ATTENDANCE_READ: [SUPERADMIN, ADMIN, STAFF],
+    ATTENDANCE_WRITE: [ADMIN, STAFF],
+
+    // --- Reporting & gamification ---
+    DASHBOARD_READ: [SUPERADMIN, ADMIN, STAFF],
+    REPORTS_READ: [SUPERADMIN, ADMIN, STAFF],
+    GAMIFICATION_MANAGE: [ADMIN, SUPERADMIN],
+
+    // --- Personal training ---
+    PT_MANAGE: [SUPERADMIN, ADMIN, STAFF],
+    // Who may be *assigned* as a trainer on a session.
+    //
+    // Staff only. Dieticians are excluded because they do not deliver training,
+    // and admins because the admin account is usually an organisational login
+    // rather than a person — facilities routinely name it after the gym, so
+    // including admins filled the trainer dropdown with entries like "Gold Gym"
+    // repeated once per admin account. An owner who genuinely trains should
+    // hold a staff account for that role.
+    PT_TRAINER: [STAFF],
+
+    // --- Nutrition ---
+    NUTRITION_MANAGE: [SUPERADMIN, ADMIN, STAFF],
+    FOOD_DB: [SUPERADMIN, ADMIN, STAFF, DIETICIAN],
+
+    // --- Dieticians & diet charts ---
+    DIETICIAN_MANAGE: [SUPERADMIN, ADMIN],
+    CHART_READ: [SUPERADMIN, ADMIN, STAFF, DIETICIAN],
+    // Dieticians author plans. Admins are included because a facility may not
+    // employ one — a small gym's owner does everything — and an admin who can
+    // delete a chart but not create one is an asymmetry with no rationale.
+    // Staff are not: front-desk is not a clinical role.
+    CHART_AUTHOR: [SUPERADMIN, ADMIN, DIETICIAN],
+    CHART_EDIT: [SUPERADMIN, ADMIN, STAFF, DIETICIAN],
+    // Deleting a member's nutrition plan is not a front-desk action. Staff keep
+    // read and health-section edit access (CHART_READ / CHART_EDIT) but cannot
+    // destroy a plan a dietician authored.
+    CHART_DELETE: [SUPERADMIN, ADMIN, DIETICIAN],
+
+    // --- Member (client app) ---
+    CLIENT_APP: [CLIENT]
+};
+
+/**
+ * May this role see every record in its facility, rather than only the subset
+ * assigned to it?
+ *
+ * Kept separate from "is an admin". Conflating the two is what let a plain
+ * staff member delete any diet chart: the dietician controller asked
+ * `isAdminRole()` both for scoping (where staff legitimately belong) and for
+ * destructive authority (where they do not).
+ */
+const isUnscoped = (role) => role === SUPERADMIN || role === ADMIN || role === STAFF;
+
+/** Roles that log into the admin web app rather than the member app. */
+const isFacilityStaff = (role) => FACILITY_STAFF.includes(role);
+
+/** May this user be assigned as the trainer on a PT session? */
+const isTrainerRole = (role) => PERMISSIONS.PT_TRAINER.includes(role);
+
+/**
+ * May this role author the diet-plan sections of a chart (goals, meal plan,
+ * specifications, guidelines)?
+ *
+ * Separate from "may see the whole facility". Staff are unscoped but are not a
+ * clinical role, so they maintain the health-assessment sections only.
+ */
+const canAuthorPlan = (role) => PERMISSIONS.CHART_AUTHOR.includes(role);
+
+const can = (capability, role) => (PERMISSIONS[capability] || []).includes(role);
+
+module.exports = {
+    ROLES,
+    FACILITY_STAFF,
+    PERMISSIONS,
+    P: PERMISSIONS,
+    isUnscoped,
+    isFacilityStaff,
+    isTrainerRole,
+    canAuthorPlan,
+    can
+};

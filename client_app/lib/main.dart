@@ -6,6 +6,7 @@ import 'core/theme/theme_controller.dart';
 import 'core/router/app_router.dart';
 
 void main() {
+  wireSessionExpiry();
   runApp(
     const ProviderScope(
       child: ClientApp(),

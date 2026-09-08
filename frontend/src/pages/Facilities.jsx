@@ -22,7 +22,10 @@ const Facilities = () => {
     // Updated subscription modal state to hold full facility object and tab
     const [subscriptionModal, setSubscriptionModal] = useState({ isOpen: false, facility: null, tab: 'plan' });
     const [manualData, setManualData] = useState({ status: '', expiresAt: '' });
-    const [packagesData, setPackagesData] = useState({ healthPro: false });
+    const [packagesData, setPackagesData] = useState({});
+    // Rendered from the server's module registry, so a new sellable module needs
+    // no change here — see backend/config/modules.js.
+    const [moduleCatalogue, setModuleCatalogue] = useState([]);
 
     const { addToast, showConfirm } = useToast();
     const [passwordModal, setPasswordModal] = useState({ isOpen: false, facilityId: null, newPassword: '' });
@@ -49,6 +52,9 @@ const Facilities = () => {
 
     useEffect(() => {
         fetchFacilities();
+        api.get('/modules')
+            .then(res => setModuleCatalogue(res.data || []))
+            .catch(() => setModuleCatalogue([]));
     }, []);
 
     useEffect(() => {
@@ -161,7 +167,7 @@ const Facilities = () => {
     const openSubscriptionModal = (facility) => {
         const expires = facility.subscriptionExpiresAt ? new Date(facility.subscriptionExpiresAt).toISOString().split('T')[0] : '';
         setManualData({ status: facility.subscriptionStatus, expiresAt: expires });
-        setPackagesData(facility.modules || { healthPro: false });
+        setPackagesData(facility.modules || {});
         setSubscriptionModal({ isOpen: true, facility: facility, tab: 'plan', selectedPlanId: facility.subscriptionPlanId });
     };
 
@@ -698,19 +704,42 @@ const Facilities = () => {
                         <div>
                             <div className="input-group">
                                 <label className="input-label">Available Modules</label>
-                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer', padding: '1rem', border: '1px solid var(--border-color)', borderRadius: '12px', background: 'rgba(255,255,255,0.03)' }}>
-                                    <input
-                                        type="checkbox"
-                                        checked={Boolean(packagesData.healthPro)}
-                                        onChange={e => setPackagesData({ ...packagesData, healthPro: e.target.checked })}
-                                    />
-                                    <div>
-                                        <div style={{ fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Health Pro (Phase 2)</div>
-                                        <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                                            Enables Body Composition, Measurement Logs, Personal Records, Fitness Tests, Mobility Screenings, and Goal Reviews.
-                                        </div>
-                                    </div>
-                                </label>
+                                <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: 0, marginBottom: '0.75rem' }}>
+                                    Overrides for this facility. Anything left untouched follows the SaaS plan,
+                                    then the product default.
+                                </p>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                                    {moduleCatalogue.map(m => {
+                                        const overridden = packagesData[m.key] != null;
+                                        return (
+                                            <label key={m.key} style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem', cursor: 'pointer', padding: '0.9rem 1rem', border: '1px solid var(--border-color)', borderRadius: '12px', background: 'rgba(255,255,255,0.03)' }}>
+                                                <input
+                                                    type="checkbox"
+                                                    style={{ marginTop: '3px' }}
+                                                    checked={overridden ? Boolean(packagesData[m.key]) : Boolean(m.default)}
+                                                    onChange={e => setPackagesData({ ...packagesData, [m.key]: e.target.checked })}
+                                                />
+                                                <div style={{ minWidth: 0 }}>
+                                                    <div style={{ fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                                        {m.label}
+                                                        {!overridden && (
+                                                            <span style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-muted)', border: '1px solid var(--border-color)', borderRadius: 6, padding: '1px 6px' }}>
+                                                                inherited
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                                                        {m.description}
+                                                        {m.requires?.length ? ` Requires: ${m.requires.join(', ')}.` : ''}
+                                                    </div>
+                                                </div>
+                                            </label>
+                                        );
+                                    })}
+                                    {moduleCatalogue.length === 0 && (
+                                        <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Loading modules…</div>
+                                    )}
+                                </div>
                             </div>
                             <div className="form-grid">
                                 <button className="btn btn-secondary" onClick={() => setSubscriptionModal({ ...subscriptionModal, isOpen: false })}>Cancel</button>

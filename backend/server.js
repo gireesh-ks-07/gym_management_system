@@ -10,9 +10,11 @@ const crypto = require('crypto');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const cron = require('node-cron');
-const Joi = require('joi');
 const { sequelize, User, Facility, Client, Plan, Payment, SubscriptionPlan, Attendance, Notification, FacilityType, FacilityAutoPayEvent } = require('./models');
 const { Op } = require('sequelize');
+const { P, ROLES, isTrainerRole } = require('./config/permissions');
+const { S, validate } = require('./config/schemas');
+const { MODULES, isModuleEnabled, resolveModules, sanitizeModuleMap } = require('./config/modules');
 
 // --- Gamification module (engine, HTTP routes, seed data) ---
 const gamification = require('./gamification/engine');
@@ -92,6 +94,20 @@ app.use((req, res, next) => {
     next();
 });
 
+// Liveness/readiness probe for the platform. Public and cheap by design — a
+// load balancer should not need credentials, and should not hit the database on
+// every probe. `?db=1` opts into a connectivity check for a readiness probe.
+app.get('/api/health', async (req, res) => {
+    if (req.query.db !== '1') return res.json({ status: 'ok' });
+    try {
+        await sequelize.authenticate();
+        res.json({ status: 'ok', database: 'ok' });
+    } catch (err) {
+        console.error('[health] database unreachable:', err?.message || err);
+        res.status(503).json({ status: 'degraded', database: 'unreachable' });
+    }
+});
+
 // Middleware for auth
 const authenticate = (req, res, next) => {
     const authHeader = req.headers['authorization'];
@@ -118,9 +134,67 @@ const authorize = (roles = []) => {
     };
 };
 
+/**
+ * Gate a route on the facility's plan rather than the user's role.
+ *
+ * Roles answer "may this person do it" (403). Modules answer "has this facility
+ * bought it" (402) — a different question with a different remedy, so it gets a
+ * different status code and a message naming the module.
+ *
+ * The resolved facility is cached on the request, so a chain that gates on two
+ * modules still costs one query.
+ */
+const requireModule = (moduleKey) => async (req, res, next) => {
+    // The platform operator is not a customer of their own product.
+    if (req.user.role === 'superadmin') return next();
+    if (!req.user.facilityId) {
+        return res.status(400).json({ message: 'User not associated with a facility' });
+    }
+    try {
+        if (!req.facility) {
+            req.facility = await Facility.findByPk(req.user.facilityId, {
+                include: [{ model: SubscriptionPlan, attributes: ['id', 'name', 'modules'] }]
+            });
+        }
+        if (!req.facility) return res.status(404).json({ message: 'Facility not found' });
+
+        if (!isModuleEnabled(req.facility, moduleKey)) {
+            const spec = MODULES.find((m) => m.key === moduleKey);
+            return res.status(402).json({
+                message: `${spec?.label || moduleKey} is not included in your plan.`,
+                code: 'MODULE_NOT_ENABLED',
+                module: moduleKey
+            });
+        }
+        next();
+    } catch (err) {
+        return sendServerError(res, err, `module check (${moduleKey})`);
+    }
+};
+
 // Log the real error server-side, return a generic message to the client so
 // internal details (stack traces, DB errors) are never leaked in responses.
+// Friendly names for the unique constraints, so a duplicate becomes an
+// explanation rather than a 500. Staff re-entering a member who already exists
+// is an everyday occurrence, not an internal error.
+const UNIQUE_CONSTRAINT_MESSAGES = {
+    clients_facility_phone: 'A member with this phone number already exists at this facility.',
+    clients_facility_email: 'A member with this email address already exists at this facility.',
+    Users_email_key: 'An account with this email address already exists.',
+    SubscriptionPlans_name_key: 'A plan with this name already exists.',
+    FacilityTypes_name_key: 'A facility type with this name already exists.'
+};
+
 const sendServerError = (res, err, context = 'request') => {
+    // A constraint violation is the database reporting a business rule, not a
+    // fault. Answer 409 with something the user can act on.
+    if (err?.name === 'SequelizeUniqueConstraintError') {
+        const constraint = err.parent?.constraint || err.fields && Object.keys(err.fields).join(',');
+        const message = UNIQUE_CONSTRAINT_MESSAGES[constraint]
+            || 'That value is already in use.';
+        console.warn(`[CONFLICT] ${context}: ${constraint}`);
+        return res.status(409).json({ message, code: 'DUPLICATE', constraint });
+    }
     console.error(`[ERROR] ${context}:`, err?.message || err);
     return res.status(500).json({ message: 'Internal server error' });
 };
@@ -474,7 +548,7 @@ const createLimitExceededNotification = async (facility, type, limit, currentCou
 
     const existingNote = await Notification.findOne({
         where: {
-            role: 'superadmin',
+            audience: 'superadmin',
             path: '/facilities',
             createdAt: { [Op.gte]: todayStart },
             message: {
@@ -487,7 +561,7 @@ const createLimitExceededNotification = async (facility, type, limit, currentCou
         await Notification.create({
             message: `Facility "${facility.name}" exceeded ${type} limit (${currentCount}/${limit}) for its SaaS plan.`,
             type: 'warning',
-            role: 'superadmin',
+            audience: 'superadmin',
             path: '/facilities'
         });
     }
@@ -749,7 +823,7 @@ const checkSubscriptionStatus = async (req, res, next) => {
 // Superadmin-only. The initial superadmin is seeded automatically at startup,
 // so this endpoint must never be open — an unauthenticated caller could
 // otherwise create their own superadmin and take over the platform.
-app.post('/api/auth/register', authenticate, authorize(['superadmin']), async (req, res) => {
+app.post('/api/auth/register', authenticate, authorize(P.PLATFORM_MANAGE), async (req, res) => {
     try {
         const { name, email, password, role, facilityId } = req.body;
         // Superadmin accounts can only be seeded server-side, never via the API.
@@ -771,15 +845,7 @@ app.post('/api/auth/register', authenticate, authorize(['superadmin']), async (r
 });
 
 // Joi validation schemas
-const loginSchema = Joi.object({
-    email: Joi.string().email().required(),
-    password: Joi.string().min(1).required()
-});
-
-app.post('/api/auth/login', authLimiter, async (req, res) => {
-    const { error } = loginSchema.validate(req.body);
-    if (error) return res.status(400).json({ message: error.details[0].message });
-
+app.post('/api/auth/login', authLimiter, validate(S.login), async (req, res) => {
     try {
         const { email, password } = req.body;
         const user = await User.findOne({ where: { email } });
@@ -797,25 +863,43 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     }
 });
 
-app.post('/api/auth/client/login', authLimiter, async (req, res) => {
+app.post('/api/auth/client/login', authLimiter, validate(S.clientLogin), async (req, res) => {
     try {
         const { email, phone, password } = req.body;
         if (!password) return res.status(400).json({ message: 'Password is required' });
         if (!email && !phone) return res.status(400).json({ message: 'Email or phone is required' });
         
-        let client;
-        if (email) {
-            client = await Client.findOne({ where: { email } });
-        } else {
-            client = await Client.findOne({ where: { phone } });
-        }
+        // A phone number is unique within a facility but not across the
+        // platform — the same person can be a member at two gyms. findOne would
+        // silently return whichever row came first, so the second member could
+        // never reach their own account. Match against all candidates instead
+        // and let the password decide.
+        const candidates = await Client.findAll({
+            where: email ? { email } : { phone },
+            limit: 10
+        });
 
-        if (!client || !client.password) {
+        const withPassword = candidates.filter((c) => c.password);
+        if (!withPassword.length) {
             return res.status(401).json({ message: 'Invalid credentials or password not set' });
         }
 
-        const isValid = await bcrypt.compare(password, client.password);
-        if (!isValid) return res.status(401).json({ message: 'Invalid credentials' });
+        const matches = [];
+        for (const candidate of withPassword) {
+            // eslint-disable-next-line no-await-in-loop
+            if (await bcrypt.compare(password, candidate.password)) matches.push(candidate);
+        }
+
+        if (!matches.length) return res.status(401).json({ message: 'Invalid credentials' });
+        if (matches.length > 1) {
+            // Same credentials at more than one facility. Guessing would be
+            // wrong half the time, so say so rather than pick.
+            return res.status(409).json({
+                message: 'This account exists at more than one facility. Please sign in with your email address.',
+                code: 'AMBIGUOUS_IDENTITY'
+            });
+        }
+        const client = matches[0];
 
         const token = jwt.sign({ id: client.id, role: 'client', facilityId: client.facilityId }, SECRET_KEY, { expiresIn: '7d' });
         res.json({ token, user: { id: client.id, name: client.name, email: client.email, phone: client.phone, role: 'client', facilityId: client.facilityId } });
@@ -824,35 +908,39 @@ app.post('/api/auth/client/login', authLimiter, async (req, res) => {
     }
 });
 
-app.post('/api/auth/client/set-password', async (req, res) => {
-    try {
-        const { phone, email, newPassword } = req.body;
-        const whereClause = phone ? { phone } : { email };
-        const client = await Client.findOne({ where: whereClause });
-        if (!client) return res.status(404).json({ message: 'Client not found' });
-        
-        client.password = newPassword;
-        await client.save();
-        res.json({ message: 'Password set successfully' });
-    } catch (error) {
-        sendServerError(res, error);
-    }
-});
+// REMOVED: POST /api/auth/client/set-password
+//
+// It took a phone number and a new password and wrote it — no authentication,
+// no token, no OTP, no rate limit, no password policy. Anyone who knew a
+// member's ten-digit number owned their account, and with it their health
+// profile, diet chart, attendance and payment history. Verified by exploiting
+// it against a running server.
+//
+// Nothing called it: not client_app, not mobile_app, not the admin web app.
+//
+// A real reset flow belongs on the Client.resetPasswordToken /
+// resetPasswordExpires columns, which already exist and are still unused:
+// one endpoint to issue a signed, expiring token out of band, another to
+// consume it. Both behind authLimiter, both enforcing the same minimum length
+// the staff reset uses.
 
 // --- FACILITY ROUTES (Superadmin) ---
 
 // --- SUBSCRIPTION PLAN ROUTES (Superadmin) ---
 
-app.post('/api/subscription-plans', authenticate, authorize(['superadmin']), async (req, res) => {
+app.post('/api/subscription-plans', authenticate, authorize(P.PLATFORM_MANAGE), async (req, res) => {
     try {
-        const { name, price, duration, maxMembers, maxStaff, description } = req.body;
-        const plan = await SubscriptionPlan.create({ name, price, duration, maxMembers, maxStaff, description });
+        const { name, price, duration, maxMembers, maxStaff, description, modules } = req.body;
+        const plan = await SubscriptionPlan.create({
+            name, price, duration, maxMembers, maxStaff, description,
+            modules: sanitizeModuleMap(modules)
+        });
 
         // Add Notification for Super Admin
         await Notification.create({
             message: `New SaaS Plan "${name}" has been created.`,
             type: 'info',
-            role: 'superadmin',
+            audience: 'superadmin',
             path: '/subscription-plans'
         });
 
@@ -862,7 +950,11 @@ app.post('/api/subscription-plans', authenticate, authorize(['superadmin']), asy
     }
 });
 
-app.get('/api/subscription-plans', authenticate, async (req, res) => {
+// Superadmin only: this lists your SaaS pricing and, since plans gained a
+// `modules` map, the feature composition of every tier. It carried no role gate
+// at all, so any signed-in principal — a member on the client app included —
+// could read it.
+app.get('/api/subscription-plans', authenticate, authorize(P.PLATFORM_MANAGE), async (req, res) => {
     try {
         const plans = await SubscriptionPlan.findAll();
         res.json(plans);
@@ -871,9 +963,9 @@ app.get('/api/subscription-plans', authenticate, async (req, res) => {
     }
 });
 
-app.put('/api/subscription-plans/:id', authenticate, authorize(['superadmin']), async (req, res) => {
+app.put('/api/subscription-plans/:id', authenticate, authorize(P.PLATFORM_MANAGE), async (req, res) => {
     try {
-        const { name, price, duration, maxMembers, maxStaff, description } = req.body;
+        const { name, price, duration, maxMembers, maxStaff, description, modules } = req.body;
         const plan = await SubscriptionPlan.findByPk(req.params.id);
         if (!plan) return res.status(404).json({ message: 'Plan not found' });
 
@@ -883,6 +975,7 @@ app.put('/api/subscription-plans/:id', authenticate, authorize(['superadmin']), 
         plan.maxMembers = maxMembers;
         plan.maxStaff = maxStaff;
         plan.description = description;
+        if (modules !== undefined) plan.modules = sanitizeModuleMap(modules);
 
         await plan.save();
         res.json(plan);
@@ -891,7 +984,7 @@ app.put('/api/subscription-plans/:id', authenticate, authorize(['superadmin']), 
     }
 });
 
-app.delete('/api/subscription-plans/:id', authenticate, authorize(['superadmin']), async (req, res) => {
+app.delete('/api/subscription-plans/:id', authenticate, authorize(P.PLATFORM_MANAGE), async (req, res) => {
     try {
         const plan = await SubscriptionPlan.findByPk(req.params.id);
         if (!plan) return res.status(404).json({ message: 'Plan not found' });
@@ -905,7 +998,7 @@ app.delete('/api/subscription-plans/:id', authenticate, authorize(['superadmin']
 
 // --- FACILITY TYPE ROUTES (Superadmin) ---
 
-app.post('/api/facility-types', authenticate, authorize(['superadmin']), async (req, res) => {
+app.post('/api/facility-types', authenticate, authorize(P.PLATFORM_MANAGE), async (req, res) => {
     try {
         const { name, icon, memberFormConfig } = req.body;
         const type = await FacilityType.create({ name, icon, memberFormConfig });
@@ -915,7 +1008,9 @@ app.post('/api/facility-types', authenticate, authorize(['superadmin']), async (
     }
 });
 
-app.get('/api/facility-types', authenticate, async (req, res) => {
+// Superadmin only. Facility staff never call this — they receive their own
+// type, with its memberFormConfig, on the /api/facility/subscription payload.
+app.get('/api/facility-types', authenticate, authorize(P.PLATFORM_MANAGE), async (req, res) => {
     try {
         const types = await FacilityType.findAll();
         res.json(types);
@@ -924,7 +1019,7 @@ app.get('/api/facility-types', authenticate, async (req, res) => {
     }
 });
 
-app.put('/api/facility-types/:id', authenticate, authorize(['superadmin']), async (req, res) => {
+app.put('/api/facility-types/:id', authenticate, authorize(P.PLATFORM_MANAGE), async (req, res) => {
     try {
         const { name, icon, memberFormConfig } = req.body;
         const type = await FacilityType.findByPk(req.params.id);
@@ -941,7 +1036,7 @@ app.put('/api/facility-types/:id', authenticate, authorize(['superadmin']), asyn
     }
 });
 
-app.delete('/api/facility-types/:id', authenticate, authorize(['superadmin']), async (req, res) => {
+app.delete('/api/facility-types/:id', authenticate, authorize(P.PLATFORM_MANAGE), async (req, res) => {
     try {
         const type = await FacilityType.findByPk(req.params.id, {
             include: [{ model: Facility, limit: 1 }]
@@ -962,7 +1057,7 @@ app.delete('/api/facility-types/:id', authenticate, authorize(['superadmin']), a
 
 // --- FACILITY MANAGEMENT ROUTES (Superadmin) ---
 
-app.post('/api/facilities', authenticate, authorize(['superadmin']), async (req, res) => {
+app.post('/api/facilities', authenticate, authorize(P.PLATFORM_MANAGE), async (req, res) => {
     try {
         const { name, type, address, adminEmail, adminPassword, adminName, planId, facilityTypeId, healthProfileEnabled } = req.body;
 
@@ -1018,7 +1113,7 @@ app.post('/api/facilities', authenticate, authorize(['superadmin']), async (req,
         await Notification.create({
             message: `New Facility "${name}" has been registered.`,
             type: 'success',
-            role: 'superadmin',
+            audience: 'superadmin',
             path: '/facilities'
         });
 
@@ -1028,7 +1123,7 @@ app.post('/api/facilities', authenticate, authorize(['superadmin']), async (req,
     }
 });
 
-app.get('/api/facilities', authenticate, authorize(['superadmin']), async (req, res) => {
+app.get('/api/facilities', authenticate, authorize(P.PLATFORM_MANAGE), async (req, res) => {
     try {
         const facilities = await Facility.findAll({
             include: [
@@ -1102,7 +1197,7 @@ app.get('/api/facilities', authenticate, authorize(['superadmin']), async (req, 
     }
 });
 
-app.post('/api/facilities/:id/assign-plan', authenticate, authorize(['superadmin']), async (req, res) => {
+app.post('/api/facilities/:id/assign-plan', authenticate, authorize(P.PLATFORM_MANAGE), async (req, res) => {
     try {
         const { planId } = req.body;
         const facility = await Facility.findByPk(req.params.id);
@@ -1123,6 +1218,7 @@ app.post('/api/facilities/:id/assign-plan', authenticate, authorize(['superadmin
         await Notification.create({
             message: `Facility "${facility.name}" plan changed to "${plan.name}". Re-subscription required.`,
             type: 'warning',
+            audience: 'facility',
             facilityId: facility.id,
             path: '/'
         });
@@ -1133,7 +1229,7 @@ app.post('/api/facilities/:id/assign-plan', authenticate, authorize(['superadmin
     }
 });
 
-app.post('/api/facilities/:id/status', authenticate, authorize(['superadmin']), async (req, res) => {
+app.post('/api/facilities/:id/status', authenticate, authorize(P.PLATFORM_MANAGE), async (req, res) => {
     try {
         const { status } = req.body; // active, pending, blocked
         const facility = await Facility.findByPk(req.params.id);
@@ -1161,7 +1257,7 @@ app.post('/api/facilities/:id/status', authenticate, authorize(['superadmin']), 
     }
 });
 
-app.post('/api/facilities/:id/reset-password', authenticate, authorize(['superadmin']), async (req, res) => {
+app.post('/api/facilities/:id/reset-password', authenticate, authorize(P.PLATFORM_MANAGE), validate(S.resetPassword), async (req, res) => {
     try {
         const { newPassword } = req.body;
         if (!newPassword || newPassword.length < 6) {
@@ -1181,7 +1277,7 @@ app.post('/api/facilities/:id/reset-password', authenticate, authorize(['superad
     }
 });
 
-app.post('/api/facilities/:id/subscription-update', authenticate, authorize(['superadmin']), async (req, res) => {
+app.post('/api/facilities/:id/subscription-update', authenticate, authorize(P.PLATFORM_MANAGE), async (req, res) => {
     try {
         const { status, expiresAt } = req.body;
         const facility = await Facility.findByPk(req.params.id);
@@ -1211,7 +1307,7 @@ app.post('/api/facilities/:id/subscription-update', authenticate, authorize(['su
 });
 
 // --- SUPER ADMIN DASHBOARD ---
-app.get('/api/superadmin/dashboard', authenticate, authorize(['superadmin']), async (req, res) => {
+app.get('/api/superadmin/dashboard', authenticate, authorize(P.PLATFORM_MANAGE), async (req, res) => {
     try {
         const totalFacilities = await Facility.count();
         const activeFacilities = await Facility.count({ where: { subscriptionStatus: 'active' } });
@@ -1269,7 +1365,7 @@ app.get('/api/superadmin/dashboard', authenticate, authorize(['superadmin']), as
                 await Notification.create({
                     message: `Subscription for "${facility.name}" is expiring soon (${formatDisplayDate(facility.subscriptionExpiresAt)}).`,
                     type: 'warning',
-                    role: 'superadmin',
+                    audience: 'superadmin',
                     path: '/facilities'
                 });
             }
@@ -1288,8 +1384,17 @@ app.get('/api/superadmin/dashboard', authenticate, authorize(['superadmin']), as
     }
 });
 
-// Endpoint for Facility Admin to check their own subscription
-app.get('/api/facility/subscription', authenticate, async (req, res) => {
+// The module catalogue. Both the facility package toggles and the plan editor
+// render from this, so a new sellable module is one entry in config/modules.js
+// and no UI change at all.
+app.get('/api/modules', authenticate, authorize(P.PLATFORM_MANAGE), (req, res) => {
+    res.json(MODULES);
+});
+
+// Endpoint for Facility staff to check their own facility's subscription.
+// Gated: this exposes billing state and Razorpay identifiers, so it must never
+// be reachable by a member's client-app token.
+app.get('/api/facility/subscription', authenticate, authorize(P.FACILITY_SUBSCRIPTION_READ), async (req, res) => {
     try {
         if (req.user.role === 'superadmin') {
             return res.json({
@@ -1303,13 +1408,17 @@ app.get('/api/facility/subscription', authenticate, async (req, res) => {
             await syncFacilitySubscriptionFromRazorpay(facility);
             await facility.reload({ include: [SubscriptionPlan, FacilityType] });
         }
-        res.json(facility);
+        if (!facility) return res.status(404).json({ message: 'Facility not found' });
+        // `enabledModules` is the resolved answer (facility override → plan tier
+        // → registry default) so the UI never has to re-derive it and can hide
+        // what the facility hasn't bought.
+        res.json({ ...facility.toJSON(), enabledModules: resolveModules(facility) });
     } catch (error) {
         sendServerError(res, error);
     }
 });
 
-app.post('/api/facility/subscription/create-autopay', authenticate, authorize(['admin']), async (req, res) => {
+app.post('/api/facility/subscription/create-autopay', authenticate, authorize(P.FACILITY_BILLING_MANAGE), async (req, res) => {
     try {
         if (!isRazorpayConfigured()) {
             return res.status(500).json({ message: 'Razorpay sandbox credentials are missing on server.' });
@@ -1395,7 +1504,7 @@ app.post('/api/facility/subscription/create-autopay', authenticate, authorize(['
     }
 });
 
-app.post('/api/facility/subscription/verify-autopay', authenticate, authorize(['admin']), async (req, res) => {
+app.post('/api/facility/subscription/verify-autopay', authenticate, authorize(P.FACILITY_BILLING_MANAGE), async (req, res) => {
     try {
         const { razorpay_payment_id, razorpay_subscription_id, razorpay_signature } = req.body || {};
         if (!razorpay_payment_id || !razorpay_subscription_id || !razorpay_signature) {
@@ -1473,7 +1582,7 @@ app.post('/api/facility/subscription/verify-autopay', authenticate, authorize(['
         await Notification.create({
             message: `AutoPay activated successfully for "${facility.name}".`,
             type: 'success',
-            role: 'superadmin',
+            audience: 'superadmin',
             path: '/facilities'
         });
 
@@ -1495,7 +1604,11 @@ app.post('/api/razorpay/webhook', async (req, res) => {
             .update(req.rawBody || '')
             .digest('hex');
 
-        if (receivedSignature !== expectedSignature) {
+        // Timing-safe: a plain !== short-circuits on the first differing byte.
+        // timingSafeEqual throws on unequal lengths, so check that first.
+        const received = Buffer.from(receivedSignature, 'utf8');
+        const expected = Buffer.from(expectedSignature, 'utf8');
+        if (received.length !== expected.length || !crypto.timingSafeEqual(received, expected)) {
             return res.status(400).json({ message: 'Invalid webhook signature' });
         }
 
@@ -1521,13 +1634,14 @@ app.post('/api/razorpay/webhook', async (req, res) => {
             await Notification.create({
                 message: `AutoPay issue for "${facility.name}": ${reason}. Facility is now blocked.`,
                 type: 'error',
-                role: 'superadmin',
+                audience: 'superadmin',
                 path: '/facilities'
             });
 
             await Notification.create({
                 message: `AutoPay failed/stopped (${reason}). Access is blocked until subscription is reactivated.`,
                 type: 'error',
+                audience: 'facility',
                 facilityId: facility.id,
                 path: '/'
             });
@@ -1541,7 +1655,7 @@ app.post('/api/razorpay/webhook', async (req, res) => {
             await Notification.create({
                 message: `AutoPay charge/activation successful for "${facility.name}".`,
                 type: 'success',
-                role: 'superadmin',
+                audience: 'superadmin',
                 path: '/facilities'
             });
         }
@@ -1554,7 +1668,7 @@ app.post('/api/razorpay/webhook', async (req, res) => {
 
 // --- CLIENT ROUTES (Admin, Staff) ---
 
-app.post('/api/clients', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+app.post('/api/clients', authenticate, checkSubscriptionStatus, authorize(P.MEMBERS_WRITE), validate(S.createClient), async (req, res) => {
     try {
         const { name, email, phone, height, weight, joiningDate, billingRenewalDate, gender, aadhaar_number, address, customFields, healthProfile, workoutPlans } = req.body;
         // Ensure the staff/admin belongs to a facility
@@ -1602,8 +1716,15 @@ app.post('/api/clients', authenticate, checkSubscriptionStatus, authorize(['admi
         }
 
         if (clientData.planId) {
-            const plan = await Plan.findByPk(clientData.planId);
-            if (plan) {
+            // Scoped by facility: an unqualified findByPk let one facility
+            // attach another's plan, which then drove billing dates, was copied
+            // onto payment records, and — for a PT plan — handed over its
+            // session allowance.
+            const plan = await Plan.findOne({
+                where: { id: clientData.planId, facilityId: req.user.facilityId }
+            });
+            if (!plan) return res.status(400).json({ message: 'Plan not found for this facility' });
+            {
                 const expiryDate = calculateClientPlanExpiry(clientData.billingRenewalDate, plan.duration);
                 if (expiryDate) {
                     clientData.planExpiresAt = expiryDate;
@@ -1618,6 +1739,7 @@ app.post('/api/clients', authenticate, checkSubscriptionStatus, authorize(['admi
         await Notification.create({
             message: `New member "${name}" has been registered.`,
             type: 'success',
+            audience: 'facility',
             facilityId: req.user.facilityId,
             path: '/clients'
         });
@@ -1630,7 +1752,7 @@ app.post('/api/clients', authenticate, checkSubscriptionStatus, authorize(['admi
 
 // --- STAFF ROUTES (Admin) ---
 
-app.post('/api/staff', authenticate, checkSubscriptionStatus, authorize(['admin']), async (req, res) => {
+app.post('/api/staff', authenticate, checkSubscriptionStatus, authorize(P.STAFF_MANAGE), validate(S.createStaff), async (req, res) => {
     try {
         const { name, email, password, role } = req.body;
         // Admins may create general staff or dieticians.
@@ -1666,6 +1788,7 @@ app.post('/api/staff', authenticate, checkSubscriptionStatus, authorize(['admin'
         await Notification.create({
             message: `New ${newRole === 'dietician' ? 'dietician' : 'staff member'} "${name}" has been added.`,
             type: 'success',
+            audience: 'facility',
             facilityId: req.user.facilityId,
             path: '/staff'
         });
@@ -1676,7 +1799,7 @@ app.post('/api/staff', authenticate, checkSubscriptionStatus, authorize(['admin'
     }
 });
 
-app.get('/api/staff', authenticate, checkSubscriptionStatus, authorize(['admin']), async (req, res) => {
+app.get('/api/staff', authenticate, checkSubscriptionStatus, authorize(P.STAFF_MANAGE), async (req, res) => {
     try {
         const staff = await User.findAll({ where: { facilityId: req.user.facilityId, role: { [Op.in]: ['staff', 'dietician'] } } });
         res.json(staff);
@@ -1703,7 +1826,7 @@ const normalizePlanTypeFields = (body) => {
     };
 };
 
-app.post('/api/plans', authenticate, checkSubscriptionStatus, authorize(['admin']), async (req, res) => {
+app.post('/api/plans', authenticate, checkSubscriptionStatus, authorize(P.PLANS_WRITE), validate(S.createPlan), async (req, res) => {
     try {
         const { name, price, duration, description, features } = req.body;
         const ptFields = normalizePlanTypeFields(req.body);
@@ -1721,7 +1844,7 @@ app.post('/api/plans', authenticate, checkSubscriptionStatus, authorize(['admin'
     }
 });
 
-app.put('/api/plans/:id', authenticate, checkSubscriptionStatus, authorize(['admin']), async (req, res) => {
+app.put('/api/plans/:id', authenticate, checkSubscriptionStatus, authorize(P.PLANS_WRITE), validate(S.createPlan), async (req, res) => {
     try {
         const { name, price, duration, description, features } = req.body;
         const plan = await Plan.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
@@ -1749,7 +1872,7 @@ app.put('/api/plans/:id', authenticate, checkSubscriptionStatus, authorize(['adm
     }
 });
 
-app.get('/api/plans', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff', 'superadmin']), async (req, res) => {
+app.get('/api/plans', authenticate, checkSubscriptionStatus, authorize(P.PLANS_READ), async (req, res) => {
     try {
         const plans = await Plan.findAll({ where: { facilityId: req.user.facilityId } });
         res.json(plans);
@@ -1759,7 +1882,7 @@ app.get('/api/plans', authenticate, checkSubscriptionStatus, authorize(['admin',
 });
 
 // --- DASHBOARD ROUTE ---
-app.get('/api/dashboard', authenticate, authorize(['admin', 'staff', 'superadmin']), async (req, res) => {
+app.get('/api/dashboard', authenticate, authorize(P.DASHBOARD_READ), async (req, res) => {
     try {
         const facilityId = req.user.facilityId;
         const now = new Date();
@@ -1875,7 +1998,7 @@ app.get('/api/dashboard', authenticate, authorize(['admin', 'staff', 'superadmin
     }
 });
 
-app.post('/api/payments', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+app.post('/api/payments', authenticate, checkSubscriptionStatus, authorize(P.PAYMENTS_WRITE), validate(S.recordPayment), async (req, res) => {
     try {
         const { clientId, amount, method, date, transactionId } = req.body;
 
@@ -1889,22 +2012,35 @@ app.post('/api/payments', authenticate, checkSubscriptionStatus, authorize(['adm
             return res.status(404).json({ message: 'Member not found' });
         }
 
+        // invoiceNumber is unique at the database level, so a collision surfaces
+        // as a constraint error rather than two payments sharing a number.
+        // Retry a few times before giving up — with 90,000 values per month the
+        // odds of losing three draws in a row are negligible.
         const today = new Date();
         const yearMonth = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}`;
-        const rand = Math.floor(Math.random() * 90000) + 10000;
-        const invoiceNumber = `INV-${yearMonth}-${rand}`;
+        const newInvoiceNumber = () => `INV-${yearMonth}-${Math.floor(Math.random() * 90000) + 10000}`;
 
-        const payment = await Payment.create({
-            clientId,
-            amount,
-            method,
-            date,
-            transactionId,
-            processedBy: req.user.id,
-            facilityId: req.user.facilityId,
-            invoiceNumber,
-            planId: client.planId || null
-        });
+        let payment;
+        for (let attempt = 0; attempt < 5; attempt += 1) {
+            try {
+                payment = await Payment.create({
+                    clientId,
+                    amount,
+                    method,
+                    date,
+                    transactionId,
+                    processedBy: req.user.id,
+                    facilityId: req.user.facilityId,
+                    invoiceNumber: newInvoiceNumber(),
+                    planId: client.planId || null
+                });
+                break;
+            } catch (err) {
+                const isDuplicateInvoice = err.name === 'SequelizeUniqueConstraintError'
+                    && err.errors?.some((e) => e.path === 'invoiceNumber');
+                if (!isDuplicateInvoice || attempt === 4) throw err;
+            }
+        }
 
         // Activate client and set expiry
         {
@@ -1950,7 +2086,7 @@ app.post('/api/payments', authenticate, checkSubscriptionStatus, authorize(['adm
 // CLIENT APP APIs
 // ============================================================================
 
-app.get('/api/client/me', authenticate, authorize(['client']), async (req, res) => {
+app.get('/api/client/me', authenticate, authorize(P.CLIENT_APP), async (req, res) => {
     try {
         const client = await Client.findByPk(req.user.id, {
             include: [
@@ -1984,10 +2120,18 @@ app.get('/api/client/me', authenticate, authorize(['client']), async (req, res) 
             limit: 5
         });
 
+        // Which feature modules this member's facility actually has. Without it
+        // the app can only discover a missing module by calling its endpoint and
+        // getting a 402, which is a broken screen rather than a hidden tab.
+        const facility = await Facility.findByPk(client.facilityId, {
+            include: [{ model: SubscriptionPlan, attributes: ['id', 'modules'] }]
+        });
+
         res.json({
             client,
             recentAttendance,
-            recentPayments
+            recentPayments,
+            enabledModules: facility ? resolveModules(facility) : {}
         });
     } catch (error) {
         sendServerError(res, error, 'GET /api/client/me');
@@ -1997,7 +2141,7 @@ app.get('/api/client/me', authenticate, authorize(['client']), async (req, res) 
 // --- MEMBER (client-app) SCOPED READ ENDPOINTS ---
 
 // Full attendance history for the logged-in member + summary/streak.
-app.get('/api/client/attendance', authenticate, authorize(['client']), async (req, res) => {
+app.get('/api/client/attendance', authenticate, authorize(P.CLIENT_APP), async (req, res) => {
     try {
         const records = await Attendance.findAll({
             where: { clientId: req.user.id },
@@ -2025,7 +2169,7 @@ app.get('/api/client/attendance', authenticate, authorize(['client']), async (re
 });
 
 // Full payment history for the logged-in member + totals/outstanding flag.
-app.get('/api/client/payments', authenticate, authorize(['client']), async (req, res) => {
+app.get('/api/client/payments', authenticate, authorize(P.CLIENT_APP), async (req, res) => {
     try {
         const client = await Client.findByPk(req.user.id, {
             include: [{ model: Plan, attributes: ['name', 'price', 'duration'] }],
@@ -2058,7 +2202,7 @@ app.get('/api/client/payments', authenticate, authorize(['client']), async (req,
 });
 
 // GET /api/clients — syncClientPlanStatuses moved to hourly cron (see bottom of file)
-app.get('/api/clients', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff', 'superadmin']), async (req, res) => {
+app.get('/api/clients', authenticate, checkSubscriptionStatus, authorize(P.MEMBERS_READ), async (req, res) => {
     try {
         let where = {};
         if (req.user.role !== 'superadmin') {
@@ -2098,7 +2242,7 @@ app.get('/api/clients', authenticate, checkSubscriptionStatus, authorize(['admin
     }
 });
 
-app.get('/api/payments', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+app.get('/api/payments', authenticate, checkSubscriptionStatus, authorize(P.PAYMENTS_READ), async (req, res) => {
     try {
         const payments = await Payment.findAll({
             where: { facilityId: req.user.facilityId },
@@ -2115,7 +2259,7 @@ app.get('/api/payments', authenticate, checkSubscriptionStatus, authorize(['admi
     }
 });
 
-app.get('/api/reports', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff', 'superadmin']), async (req, res) => {
+app.get('/api/reports', authenticate, checkSubscriptionStatus, authorize(P.REPORTS_READ), async (req, res) => {
     try {
         const facilityId = req.user.facilityId;
         const clientWhere = facilityId ? { facilityId } : {};
@@ -2281,7 +2425,7 @@ app.get('/api/reports', authenticate, checkSubscriptionStatus, authorize(['admin
 
 // --- UPDATE & DELETE ROUTES ---
 
-app.put('/api/facilities/:id', authenticate, authorize(['superadmin']), async (req, res) => {
+app.put('/api/facilities/:id', authenticate, authorize(P.PLATFORM_MANAGE), async (req, res) => {
     try {
         const { name, address, facilityTypeId, healthProfileEnabled, modules } = req.body;
         const facility = await Facility.findByPk(req.params.id);
@@ -2297,7 +2441,7 @@ app.put('/api/facilities/:id', authenticate, authorize(['superadmin']), async (r
         }
         if (modules && typeof modules === 'object') {
             const current = facility.modules || {};
-            facility.modules = { ...current, ...modules };
+            facility.modules = { ...current, ...sanitizeModuleMap(modules) };
         }
         await facility.save();
         res.json(facility);
@@ -2306,7 +2450,7 @@ app.put('/api/facilities/:id', authenticate, authorize(['superadmin']), async (r
     }
 });
 
-app.get('/api/attendance/today', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff', 'superadmin']), async (req, res) => {
+app.get('/api/attendance/today', authenticate, checkSubscriptionStatus, authorize(P.ATTENDANCE_READ), async (req, res) => {
     try {
         const today = new Date().toISOString().split('T')[0];
         const where = { date: today };
@@ -2322,7 +2466,7 @@ app.get('/api/attendance/today', authenticate, checkSubscriptionStatus, authoriz
     }
 });
 
-app.get('/api/attendance/client/:clientId', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff', 'superadmin']), async (req, res) => {
+app.get('/api/attendance/client/:clientId', authenticate, checkSubscriptionStatus, authorize(P.ATTENDANCE_READ), async (req, res) => {
     try {
         const { clientId } = req.params;
         const where = { clientId };
@@ -2339,7 +2483,7 @@ app.get('/api/attendance/client/:clientId', authenticate, checkSubscriptionStatu
     }
 });
 
-app.post('/api/attendance', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+app.post('/api/attendance', authenticate, checkSubscriptionStatus, authorize(P.ATTENDANCE_WRITE), async (req, res) => {
     try {
         const { clientId, status } = req.body;
         const today = new Date().toISOString().split('T')[0];
@@ -2374,7 +2518,7 @@ app.post('/api/attendance', authenticate, checkSubscriptionStatus, authorize(['a
     }
 });
 
-app.delete('/api/facilities/:id', authenticate, authorize(['superadmin']), async (req, res) => {
+app.delete('/api/facilities/:id', authenticate, authorize(P.PLATFORM_MANAGE), async (req, res) => {
     try {
         const facility = await Facility.findByPk(req.params.id);
         if (!facility) return res.status(404).json({ message: 'Facility not found' });
@@ -2385,7 +2529,7 @@ app.delete('/api/facilities/:id', authenticate, authorize(['superadmin']), async
     }
 });
 
-app.put('/api/clients/:id', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+app.put('/api/clients/:id', authenticate, checkSubscriptionStatus, authorize(P.MEMBERS_WRITE), validate(S.updateClient), async (req, res) => {
     try {
         const { name, email, phone, height, weight, joiningDate, billingRenewalDate, gender, aadhaar_number, address, customFields, healthProfile, workoutPlans } = req.body;
         const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
@@ -2428,8 +2572,11 @@ app.put('/api/clients/:id', authenticate, checkSubscriptionStatus, authorize(['a
         const planChanged = oldPlanId !== client.planId;
 
         if (client.planId) {
-            const plan = await Plan.findByPk(client.planId);
-            if (plan) {
+            const plan = await Plan.findOne({
+                where: { id: client.planId, facilityId: req.user.facilityId }
+            });
+            if (!plan) return res.status(400).json({ message: 'Plan not found for this facility' });
+            {
                 const expiryDate = calculateClientPlanExpiry(client.billingRenewalDate, plan.duration);
                 if (expiryDate) {
                     client.planExpiresAt = expiryDate;
@@ -2453,7 +2600,7 @@ app.put('/api/clients/:id', authenticate, checkSubscriptionStatus, authorize(['a
     }
 });
 
-app.delete('/api/clients/:id', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+app.delete('/api/clients/:id', authenticate, checkSubscriptionStatus, authorize(P.MEMBERS_WRITE), async (req, res) => {
     try {
         const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
         if (!client) return res.status(404).json({ message: 'Client not found' });
@@ -2464,10 +2611,16 @@ app.delete('/api/clients/:id', authenticate, checkSubscriptionStatus, authorize(
     }
 });
 
-app.get('/api/clients/:id/health-profile', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+app.get('/api/clients/:id/health-profile', authenticate, checkSubscriptionStatus, authorize(P.HEALTH_READ), async (req, res) => {
     try {
         const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
         if (!client) return res.status(404).json({ message: 'Client not found' });
+        // Dieticians read this profile to build a diet plan around the member's
+        // real training week — but only for the members assigned to them.
+        // Admins and staff are unscoped.
+        if (req.user.role === ROLES.DIETICIAN && client.dieticianId !== req.user.id) {
+            return res.status(403).json({ message: 'This member is not assigned to you' });
+        }
         const healthEnabled = await getFacilityHealthFeature(req.user.facilityId);
         if (!healthEnabled) {
             return res.status(403).json({ message: 'Health profile is disabled for this facility.' });
@@ -2541,7 +2694,7 @@ app.get('/api/clients/:id/health-profile', authenticate, checkSubscriptionStatus
     }
 });
 
-app.put('/api/clients/:id/health-profile', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+app.put('/api/clients/:id/health-profile', authenticate, checkSubscriptionStatus, authorize(P.HEALTH_WRITE), async (req, res) => {
     try {
         const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
         if (!client) return res.status(404).json({ message: 'Client not found' });
@@ -2572,7 +2725,7 @@ const getFacilityHealthPro = async (facilityId) => {
 // --- PHASE 2: HEALTH PRO ENDPOINTS ---
 
 // Body Composition History — POST a new entry
-app.post('/api/clients/:id/health-profile/body-composition', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+app.post('/api/clients/:id/health-profile/body-composition', authenticate, checkSubscriptionStatus, authorize(P.HEALTH_WRITE), async (req, res) => {
     try {
         const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
         if (!client) return res.status(404).json({ message: 'Client not found' });
@@ -2600,7 +2753,7 @@ app.post('/api/clients/:id/health-profile/body-composition', authenticate, check
 });
 
 // Body Measurements Log — POST a new entry
-app.post('/api/clients/:id/health-profile/measurements', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+app.post('/api/clients/:id/health-profile/measurements', authenticate, checkSubscriptionStatus, authorize(P.HEALTH_WRITE), async (req, res) => {
     try {
         const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
         if (!client) return res.status(404).json({ message: 'Client not found' });
@@ -2627,7 +2780,7 @@ app.post('/api/clients/:id/health-profile/measurements', authenticate, checkSubs
 });
 
 // Personal Records (PRs) — POST a new record
-app.post('/api/clients/:id/health-profile/personal-records', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+app.post('/api/clients/:id/health-profile/personal-records', authenticate, checkSubscriptionStatus, authorize(P.HEALTH_WRITE), async (req, res) => {
     try {
         const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
         if (!client) return res.status(404).json({ message: 'Client not found' });
@@ -2654,7 +2807,7 @@ app.post('/api/clients/:id/health-profile/personal-records', authenticate, check
 });
 
 // Fitness Tests — POST a new test result
-app.post('/api/clients/:id/health-profile/fitness-tests', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+app.post('/api/clients/:id/health-profile/fitness-tests', authenticate, checkSubscriptionStatus, authorize(P.HEALTH_WRITE), async (req, res) => {
     try {
         const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
         if (!client) return res.status(404).json({ message: 'Client not found' });
@@ -2678,7 +2831,7 @@ app.post('/api/clients/:id/health-profile/fitness-tests', authenticate, checkSub
 });
 
 // Mobility Screening — POST a new screening result
-app.post('/api/clients/:id/health-profile/mobility-screenings', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+app.post('/api/clients/:id/health-profile/mobility-screenings', authenticate, checkSubscriptionStatus, authorize(P.HEALTH_WRITE), async (req, res) => {
     try {
         const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
         if (!client) return res.status(404).json({ message: 'Client not found' });
@@ -2699,7 +2852,7 @@ app.post('/api/clients/:id/health-profile/mobility-screenings', authenticate, ch
 });
 
 // Goal Reviews — POST a new review entry
-app.post('/api/clients/:id/health-profile/goal-reviews', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+app.post('/api/clients/:id/health-profile/goal-reviews', authenticate, checkSubscriptionStatus, authorize(P.HEALTH_WRITE), async (req, res) => {
     try {
         const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
         if (!client) return res.status(404).json({ message: 'Client not found' });
@@ -2726,7 +2879,7 @@ app.post('/api/clients/:id/health-profile/goal-reviews', authenticate, checkSubs
 });
 
 // Supplements — POST a structured supplement (type + name)
-app.post('/api/clients/:id/health-profile/supplements', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+app.post('/api/clients/:id/health-profile/supplements', authenticate, checkSubscriptionStatus, authorize(P.HEALTH_WRITE), async (req, res) => {
     try {
         const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
         if (!client) return res.status(404).json({ message: 'Client not found' });
@@ -2749,7 +2902,7 @@ app.post('/api/clients/:id/health-profile/supplements', authenticate, checkSubsc
 });
 
 // Supplements — DELETE a supplement by id
-app.delete('/api/clients/:id/health-profile/supplements/:supplementId', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+app.delete('/api/clients/:id/health-profile/supplements/:supplementId', authenticate, checkSubscriptionStatus, authorize(P.HEALTH_WRITE), async (req, res) => {
     try {
         const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
         if (!client) return res.status(404).json({ message: 'Client not found' });
@@ -2762,7 +2915,7 @@ app.delete('/api/clients/:id/health-profile/supplements/:supplementId', authenti
 });
 
 // Invoice endpoint — GET payment invoice data
-app.get('/api/payments/:id/invoice', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+app.get('/api/payments/:id/invoice', authenticate, checkSubscriptionStatus, authorize(P.PAYMENTS_READ), async (req, res) => {
     try {
         const payment = await Payment.findOne({
             where: { id: req.params.id, facilityId: req.user.facilityId },
@@ -2800,7 +2953,7 @@ app.get('/api/payments/:id/invoice', authenticate, checkSubscriptionStatus, auth
     } catch (error) { sendServerError(res, error); }
 });
 
-app.post('/api/clients/:id/workout-plans', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+app.post('/api/clients/:id/workout-plans', authenticate, checkSubscriptionStatus, authorize(P.WORKOUTS_WRITE), async (req, res) => {
     try {
         const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
         if (!client) return res.status(404).json({ message: 'Client not found' });
@@ -2821,7 +2974,7 @@ app.post('/api/clients/:id/workout-plans', authenticate, checkSubscriptionStatus
     }
 });
 
-app.put('/api/clients/:id/workout-plans/:planId/reschedule', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+app.put('/api/clients/:id/workout-plans/:planId/reschedule', authenticate, checkSubscriptionStatus, authorize(P.WORKOUTS_WRITE), async (req, res) => {
     try {
         const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
         if (!client) return res.status(404).json({ message: 'Client not found' });
@@ -2866,7 +3019,7 @@ app.put('/api/clients/:id/workout-plans/:planId/reschedule', authenticate, check
     }
 });
 
-app.post('/api/clients/:id/workout-plans/:planId/progress', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+app.post('/api/clients/:id/workout-plans/:planId/progress', authenticate, checkSubscriptionStatus, authorize(P.WORKOUTS_WRITE), async (req, res) => {
     try {
         const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
         if (!client) return res.status(404).json({ message: 'Client not found' });
@@ -2905,7 +3058,7 @@ app.post('/api/clients/:id/workout-plans/:planId/progress', authenticate, checkS
     }
 });
 
-app.post('/api/clients/:id/workout-schedules', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+app.post('/api/clients/:id/workout-schedules', authenticate, checkSubscriptionStatus, authorize(P.WORKOUTS_WRITE), async (req, res) => {
     try {
         const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
         if (!client) return res.status(404).json({ message: 'Client not found' });
@@ -2969,7 +3122,7 @@ app.post('/api/clients/:id/workout-schedules', authenticate, checkSubscriptionSt
     }
 });
 
-app.post('/api/clients/:id/workout-schedules/:scheduleId/day-log', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+app.post('/api/clients/:id/workout-schedules/:scheduleId/day-log', authenticate, checkSubscriptionStatus, authorize(P.WORKOUTS_WRITE), async (req, res) => {
     try {
         const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
         if (!client) return res.status(404).json({ message: 'Client not found' });
@@ -3051,7 +3204,7 @@ app.post('/api/clients/:id/workout-schedules/:scheduleId/day-log', authenticate,
     }
 });
 
-app.post('/api/clients/:id/weekly-weight', authenticate, checkSubscriptionStatus, authorize(['admin', 'staff']), async (req, res) => {
+app.post('/api/clients/:id/weekly-weight', authenticate, checkSubscriptionStatus, authorize(P.HEALTH_WRITE), async (req, res) => {
     try {
         const client = await Client.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
         if (!client) return res.status(404).json({ message: 'Client not found' });
@@ -3089,7 +3242,7 @@ app.post('/api/clients/:id/weekly-weight', authenticate, checkSubscriptionStatus
     }
 });
 
-app.put('/api/staff/:id', authenticate, checkSubscriptionStatus, authorize(['admin']), async (req, res) => {
+app.put('/api/staff/:id', authenticate, checkSubscriptionStatus, authorize(P.STAFF_MANAGE), async (req, res) => {
     try {
         const { name, email } = req.body;
         const staff = await User.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId, role: { [Op.in]: ['staff', 'dietician'] } } });
@@ -3105,7 +3258,7 @@ app.put('/api/staff/:id', authenticate, checkSubscriptionStatus, authorize(['adm
     }
 });
 
-app.delete('/api/staff/:id', authenticate, checkSubscriptionStatus, authorize(['admin']), async (req, res) => {
+app.delete('/api/staff/:id', authenticate, checkSubscriptionStatus, authorize(P.STAFF_MANAGE), async (req, res) => {
     try {
         const staff = await User.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId, role: { [Op.in]: ['staff', 'dietician'] } } });
         if (!staff) return res.status(404).json({ message: 'Staff member not found' });
@@ -3120,7 +3273,7 @@ app.delete('/api/staff/:id', authenticate, checkSubscriptionStatus, authorize(['
     }
 });
 
-app.delete('/api/plans/:id', authenticate, checkSubscriptionStatus, authorize(['admin']), async (req, res) => {
+app.delete('/api/plans/:id', authenticate, checkSubscriptionStatus, authorize(P.PLANS_WRITE), async (req, res) => {
     try {
         const plan = await Plan.findOne({ where: { id: req.params.id, facilityId: req.user.facilityId } });
         if (!plan) return res.status(404).json({ message: 'Plan not found' });
@@ -3131,18 +3284,34 @@ app.delete('/api/plans/:id', authenticate, checkSubscriptionStatus, authorize(['
     }
 });
 
+// The set of notifications a given caller is allowed to see. Every notification
+// endpoint goes through this — reads and writes alike — so a row can never be
+// read or marked by someone it was not addressed to.
+const notificationScope = (user) => {
+    if (user.role === 'superadmin') {
+        return { audience: 'superadmin' };
+    }
+    if (user.role === 'client') {
+        // Members see only their own. Note they must NOT match on facilityId:
+        // every facility notification carries one, which is exactly how the
+        // facility's internal notices leaked into the member app.
+        return { audience: 'client', clientId: user.id };
+    }
+    // Facility staff (admin / staff / dietician): facility-wide notices, plus
+    // anything addressed to them personally.
+    return {
+        facilityId: user.facilityId,
+        [Op.or]: [
+            { audience: 'facility' },
+            { audience: 'user', userId: user.id }
+        ]
+    };
+};
+
 app.get('/api/notifications', authenticate, async (req, res) => {
     try {
-        const { role, facilityId } = req.user;
-        const where = {};
-        if (role === 'superadmin') {
-            where.role = 'superadmin';
-        } else {
-            where.facilityId = facilityId;
-        }
-
         const notifications = await Notification.findAll({
-            where,
+            where: notificationScope(req.user),
             order: [['createdAt', 'DESC']],
             limit: 20
         });
@@ -3154,11 +3323,13 @@ app.get('/api/notifications', authenticate, async (req, res) => {
 
 app.post('/api/notifications/mark-read/:id', authenticate, async (req, res) => {
     try {
-        const notification = await Notification.findByPk(req.params.id);
-        if (notification) {
-            notification.isRead = true;
-            await notification.save();
-        }
+        // Scoped update, not findByPk — otherwise any authenticated caller can
+        // mark any notification in the system read.
+        const [updated] = await Notification.update(
+            { isRead: true },
+            { where: { id: req.params.id, ...notificationScope(req.user) } }
+        );
+        if (!updated) return res.status(404).json({ message: 'Notification not found' });
         res.json({ success: true });
     } catch (error) {
         sendServerError(res, error);
@@ -3167,15 +3338,7 @@ app.post('/api/notifications/mark-read/:id', authenticate, async (req, res) => {
 
 app.post('/api/notifications/mark-all-read', authenticate, async (req, res) => {
     try {
-        const { role, facilityId } = req.user;
-        const where = {};
-        if (role === 'superadmin') {
-            where.role = 'superadmin';
-        } else {
-            where.facilityId = facilityId;
-        }
-
-        await Notification.update({ isRead: true }, { where });
+        await Notification.update({ isRead: true }, { where: notificationScope(req.user) });
         res.json({ success: true });
     } catch (error) {
         sendServerError(res, error);
@@ -3183,22 +3346,42 @@ app.post('/api/notifications/mark-all-read', authenticate, async (req, res) => {
 });
 
 // --- GAMIFICATION ROUTES (client app + admin portal) ---
-registerGamificationRoutes(app, { authenticate, authorize, checkSubscriptionStatus, sendServerError });
+registerGamificationRoutes(app, { authenticate, authorize, checkSubscriptionStatus, requireModule, sendServerError });
 
 // --- NUTRITION ROUTES ---
-registerNutritionRoutes(app, { authenticate, authorize, checkSubscriptionStatus, sendServerError });
+registerNutritionRoutes(app, { authenticate, authorize, checkSubscriptionStatus, requireModule, sendServerError });
 
 // --- PERSONAL TRAINING ROUTES ---
-registerPTRoutes(app, { authenticate, authorize, checkSubscriptionStatus, sendServerError });
+registerPTRoutes(app, { authenticate, authorize, checkSubscriptionStatus, requireModule, sendServerError });
 
 // --- DIETICIAN / DIET CHART ROUTES ---
-registerDieticianRoutes(app, { authenticate, authorize, checkSubscriptionStatus, sendServerError });
+registerDieticianRoutes(app, { authenticate, authorize, checkSubscriptionStatus, requireModule, sendServerError });
 
 // Initialize DB and Start Server
 // Global Error Handler
 app.use((err, req, res, next) => {
-    console.error('Unhandled Error:', err);
-    res.status(500).json({ message: 'Internal Server Error', error: err.message });
+    // Log everything, return nothing. This used to pass err.message back to the
+    // client, which for Sequelize means constraint names, column names and
+    // occasionally fragments of the query — undoing the sanitising that
+    // sendServerError does deliberately everywhere else.
+    console.error('[ERROR] unhandled:', req.method, req.path, err?.stack || err);
+    const body = { message: 'Internal Server Error' };
+    if (process.env.NODE_ENV !== 'production') body.error = err?.message;
+    res.status(500).json(body);
+});
+
+// A single missed `await` — in a cron job, or one of the deliberately
+// fire-and-forget gamification calls — terminates the process on Node 15+.
+// Without these handlers the only evidence is the platform restarting the
+// container. Log with the stack, then exit so it restarts cleanly rather than
+// continuing in an unknown state.
+process.on('unhandledRejection', (reason) => {
+    console.error('[FATAL] Unhandled promise rejection:', reason?.stack || reason);
+    process.exit(1);
+});
+process.on('uncaughtException', (err) => {
+    console.error('[FATAL] Uncaught exception:', err?.stack || err);
+    process.exit(1);
 });
 
 // --- SCHEDULED CRON JOBS ---
@@ -3234,13 +3417,13 @@ cron.schedule('0 0 * * *', async () => {
         });
         for (const facility of expiringFacilities) {
             const existing = await Notification.findOne({
-                where: { role: 'superadmin', message: { [Op.like]: `%${facility.name}%expiring%` }, createdAt: { [Op.gte]: new Date(now - 24 * 60 * 60 * 1000) } }
+                where: { audience: 'superadmin', message: { [Op.like]: `%${facility.name}%expiring%` }, createdAt: { [Op.gte]: new Date(now - 24 * 60 * 60 * 1000) } }
             });
             if (!existing) {
                 await Notification.create({
                     message: `Facility "${facility.name}" subscription expiring on ${facility.subscriptionExpiresAt}.`,
                     type: 'warning',
-                    role: 'superadmin',
+                    audience: 'superadmin',
                     path: '/facilities'
                 });
             }
@@ -3292,8 +3475,29 @@ cron.schedule('1 0 * * *', async () => {
 })();
 
 const isProduction = process.env.NODE_ENV === 'production';
-// CRITICAL: Never run alter:true in production — can drop/modify columns
-sequelize.sync({ alter: !isProduction }).then(async () => {
+
+// Schema ownership
+// ----------------
+// Migrations own the schema. `npm start` runs them first (see the prestart
+// script), and migrations/20260101000000-baseline-schema.js can build the
+// database from nothing.
+//
+// sync() is a development convenience only. It used to run in production too,
+// where — without `alter` — it creates missing tables but silently never adds
+// missing columns. That is how the schema drifted away from the migration
+// history: models gained columns that production never got, and a migration
+// that had created the core tables was deleted while still recorded as run.
+//
+// Leaving it on in production would also let a new model create its table
+// without a migration, putting the two back out of step. So: off in
+// production, and DB_SYNC=false switches it off locally too when you want to
+// prove the migrations really are sufficient.
+const useSync = !isProduction && process.env.DB_SYNC !== 'false';
+if (isProduction) {
+    console.log('[db] production: schema comes from migrations (sync disabled)');
+}
+
+Promise.resolve(useSync ? sequelize.sync({ alter: true }) : sequelize.authenticate()).then(async () => {
     // Create default superadmin if not exists
     const superadmin = await User.findOne({ where: { role: 'superadmin' } });
     if (!superadmin) {
@@ -3316,9 +3520,9 @@ sequelize.sync({ alter: !isProduction }).then(async () => {
     const noteCount = await Notification.count();
     if (noteCount === 0) {
         await Notification.bulkCreate([
-            { message: 'New facility "Power House" has registered on the platform.', type: 'success', role: 'superadmin', path: '/facilities' },
-            { message: 'Facility "Elite Fitness" subscription is expiring within 7 days.', type: 'warning', role: 'superadmin', path: '/facilities' },
-            { message: 'Your monthly revenue report for February is now available.', type: 'info', role: 'superadmin', path: '/reports' }
+            { message: 'New facility "Power House" has registered on the platform.', type: 'success', audience: 'superadmin', path: '/facilities' },
+            { message: 'Facility "Elite Fitness" subscription is expiring within 7 days.', type: 'warning', audience: 'superadmin', path: '/facilities' },
+            { message: 'Your monthly revenue report for February is now available.', type: 'info', audience: 'superadmin', path: '/reports' }
         ]);
         console.log('Initial notifications seeded.');
     }

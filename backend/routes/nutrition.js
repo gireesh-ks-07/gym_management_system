@@ -1,27 +1,37 @@
 const nutritionController = require('../controllers/nutritionController');
+const { P } = require('../config/permissions');
 
 function registerNutritionRoutes(app, deps) {
-    const { authenticate, authorize, checkSubscriptionStatus } = deps;
+    const { authenticate, authorize, checkSubscriptionStatus, requireModule } = deps;
 
     // Resolve facility ID similar to gamification
+    // Superadmins are not bound to one facility, so they must name the facility
+    // they are acting on. Falling through with a null facilityId made the
+    // controllers query `where: { facilityId: null }` and return an empty list —
+    // a superadmin who forgot the parameter saw an empty module and concluded
+    // the data was gone.
     const resolveFacilityId = (req, res, next) => {
         if (req.user.role === 'superadmin') {
-            req.user.facilityId = req.query.facilityId || req.body?.facilityId || null;
+            const facilityId = req.query.facilityId || req.body?.facilityId || null;
+            if (!facilityId) {
+                return res.status(400).json({ message: 'facilityId is required when acting as superadmin' });
+            }
+            req.user.facilityId = facilityId;
         }
         next();
     };
 
-    const adminOnly = [authenticate, authorize(['superadmin', 'admin', 'staff']), resolveFacilityId];
+    const adminOnly = [authenticate, requireModule('nutrition'), authorize(P.NUTRITION_MANAGE), resolveFacilityId];
     // Dieticians may also manage the food database (to build their diet charts).
-    const foodEditors = [authenticate, authorize(['superadmin', 'admin', 'staff', 'dietician']), resolveFacilityId];
-    const clientOnly = [authenticate, authorize(['client'])];
+    const foodEditors = [authenticate, requireModule('nutrition'), authorize(P.FOOD_DB), resolveFacilityId];
+    const clientOnly = [authenticate, authorize(P.CLIENT_APP), requireModule('nutrition')];
 
     // ==========================================
     // ADMIN / TRAINER ROUTES
     // ==========================================
     
     // Food Database
-    app.get('/api/nutrition/foods', authenticate, nutritionController.getFoods);
+    app.get('/api/nutrition/foods', foodEditors, nutritionController.getFoods);
     app.post('/api/nutrition/foods', foodEditors, nutritionController.createFood);
     app.put('/api/nutrition/foods/:id', foodEditors, nutritionController.updateFood);
     app.delete('/api/nutrition/foods/:id', foodEditors, nutritionController.deleteFood);

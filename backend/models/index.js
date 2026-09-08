@@ -1,4 +1,4 @@
-const { Sequelize, DataTypes } = require('sequelize');
+const { Sequelize, DataTypes, Op } = require('sequelize');
 const path = require('path');
 const bcrypt = require('bcryptjs');
 const { encrypt, decrypt } = require('../utils/encryption');
@@ -59,7 +59,11 @@ const SubscriptionPlan = sequelize.define('SubscriptionPlan', {
     duration: { type: DataTypes.INTEGER, allowNull: false }, // in months
     maxMembers: { type: DataTypes.INTEGER, allowNull: true }, // Optional limit
     maxStaff: { type: DataTypes.INTEGER, allowNull: true }, // Optional limit
-    description: { type: DataTypes.TEXT, allowNull: true }
+    description: { type: DataTypes.TEXT, allowNull: true },
+    // Which feature modules this tier includes. See config/modules.js — a
+    // facility's own `modules` overrides this, and the registry default applies
+    // when neither says anything.
+    modules: { type: DataTypes.JSON, defaultValue: {} }
 });
 
 const FacilityType = sequelize.define('FacilityType', {
@@ -113,6 +117,9 @@ const Client = sequelize.define('Client', {
     resetPasswordToken: { type: DataTypes.STRING, allowNull: true },
     resetPasswordExpires: { type: DataTypes.DATE, allowNull: true },
     phone: { type: DataTypes.STRING, allowNull: false },
+    // Uniqueness is per facility, not global — the same person legitimately
+    // holds memberships at two different gyms. See the composite indexes below.
+
     height: { type: DataTypes.FLOAT, allowNull: true },
     weight: { type: DataTypes.FLOAT, allowNull: true },
     joiningDate: { type: DataTypes.DATEONLY, defaultValue: DataTypes.NOW },
@@ -132,12 +139,42 @@ const Client = sequelize.define('Client', {
     // Dietician assigned to this member (nullable). Set by admins; scopes which
     // clients a dietician can see and create diet charts for.
     dieticianId: { type: DataTypes.INTEGER, allowNull: true }
+}, {
+    indexes: [
+        // Without these, two members in one facility could share a phone number,
+        // and member login — which looks a client up by phone alone — would
+        // silently resolve to whichever row came first, locking the other out of
+        // their own account.
+        { name: 'clients_facility_phone', unique: true, fields: ['facilityId', 'phone'] },
+        {
+            name: 'clients_facility_email',
+            unique: true,
+            fields: ['facilityId', 'email'],
+            // Partial: email is optional, and many members share the absence of one.
+            where: { email: { [Op.ne]: null } }
+        }
+    ]
 });
 
 const Attendance = sequelize.define('Attendance', {
     date: { type: DataTypes.DATEONLY, defaultValue: DataTypes.NOW },
     status: { type: DataTypes.ENUM('present', 'absent', 'excused'), defaultValue: 'present' },
-    checkInTime: { type: DataTypes.TIME, defaultValue: DataTypes.NOW }
+    // TIME column: DataTypes.NOW emits a full ISO timestamp, which Postgres
+    // rejects for `time` ("invalid input syntax for type time"). Every caller
+    // happened to pass an explicit value, so the broken default never fired —
+    // but any create that omitted it would have thrown.
+    checkInTime: {
+        type: DataTypes.TIME,
+        defaultValue: () => new Date().toLocaleTimeString('en-US', { hour12: false })
+    },
+    // How this row came to exist. A row raised by completing a PT session is
+    // removed again if that session is un-completed or deleted; a row someone
+    // marked at the front desk never is.
+    source: {
+        type: DataTypes.ENUM('manual', 'pt_session'),
+        allowNull: false,
+        defaultValue: 'manual'
+    }
 });
 
 const Payment = sequelize.define('Payment', {
@@ -146,7 +183,12 @@ const Payment = sequelize.define('Payment', {
     date: { type: DataTypes.DATEONLY, defaultValue: DataTypes.NOW },
     transactionId: { type: DataTypes.STRING, allowNull: true }, // Captured for UPI
     paymentId: { type: DataTypes.STRING, allowNull: true },     // Razorpay payment ID
-    invoiceNumber: { type: DataTypes.STRING, allowNull: true }, // Auto-generated invoice number
+    // Unique: the generator draws 5 random digits inside a month, a space of
+    // 90,000, so by the birthday bound collisions become likely in the low
+    // hundreds of invoices per month. Duplicate invoice numbers are an
+    // accounting problem, and the constraint turns a silent duplicate into a
+    // loud failure the caller retries.
+    invoiceNumber: { type: DataTypes.STRING, allowNull: true, unique: true },
     planId: { type: DataTypes.INTEGER, allowNull: true }        // Plan at time of payment
 });
 
@@ -173,14 +215,39 @@ const Plan = sequelize.define('Plan', {
     }
 });
 
+// Who a notification is addressed to is stated explicitly by `audience`, never
+// inferred from which id columns happen to be set. Inferring it is what leaked
+// facility notifications into members' client-app feeds: every row carries a
+// facilityId, so filtering on facilityId alone matched everything.
+//
+//   audience            required ids            read by
+//   ------------------  ---------------------   -------------------------------
+//   'superadmin'        —                       superadmins only
+//   'facility'          facilityId              staff of that facility
+//   'user'              facilityId + userId     that one staff user
+//   'client'            facilityId + clientId   that one member (client app)
+const NOTIFICATION_AUDIENCES = ['superadmin', 'facility', 'user', 'client'];
+
 const Notification = sequelize.define('Notification', {
     message: { type: DataTypes.STRING, allowNull: false },
     type: { type: DataTypes.STRING, defaultValue: 'info' }, // info, warning, success, error
-    role: { type: DataTypes.STRING, allowNull: true }, // Targeted role (e.g., superadmin)
-    facilityId: { type: DataTypes.INTEGER, allowNull: true }, // Targeted facility
-    clientId: { type: DataTypes.INTEGER, allowNull: true }, // Targeted member (client app / gamification)
+    audience: {
+        type: DataTypes.ENUM(...NOTIFICATION_AUDIENCES),
+        allowNull: false,
+        defaultValue: 'facility'
+    },
+    facilityId: { type: DataTypes.INTEGER, allowNull: true },
+    userId: { type: DataTypes.INTEGER, allowNull: true },   // audience 'user'
+    clientId: { type: DataTypes.INTEGER, allowNull: true }, // audience 'client'
     isRead: { type: DataTypes.BOOLEAN, defaultValue: false },
     path: { type: DataTypes.STRING, allowNull: true } // Redirection path
+}, {
+    indexes: [
+        { fields: ['audience'] },
+        { fields: ['facilityId'] },
+        { fields: ['userId'] },
+        { fields: ['clientId'] }
+    ]
 });
 
 // AutoPay event log for tracking Razorpay subscription events
@@ -334,6 +401,7 @@ module.exports = {
     sequelize,
     User, Facility, Client, Payment, Plan, SubscriptionPlan,
     Attendance, Notification, FacilityType, FacilityAutoPayEvent,
+    NOTIFICATION_AUDIENCES,
     ...gamificationModels,
     ...nutritionModels,
     ...ptModels

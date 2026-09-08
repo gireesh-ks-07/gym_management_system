@@ -10,6 +10,16 @@ const STATUS_OPTIONS = [
     { key: 'no_show', label: 'No-show' }
 ];
 
+// Two staff can share a name, and a facility's admin accounts are often named
+// after the gym itself — so a bare name list can show the same label several
+// times with no way to tell the entries apart. Fall back to the email only
+// where a name actually repeats, rather than cluttering every row.
+export const trainerLabel = (trainer, all) => {
+    const sameName = all.filter((t) => t.name === trainer.name);
+    if (sameName.length < 2) return trainer.name;
+    return `${trainer.name} · ${trainer.email || `#${trainer.id}`}`;
+};
+
 // Convert a date value to the value a <input type="datetime-local"> expects.
 const toLocalInput = (value) => {
     const d = value ? new Date(value) : new Date();
@@ -101,8 +111,14 @@ const SessionModal = ({ isOpen, onClose, onSaved, session, presetClientId, membe
                         <label className="input-label">Trainer</label>
                         <select className="input-field" value={form.trainerId} onChange={(e) => setForm({ ...form, trainerId: e.target.value })}>
                             <option value="">Unassigned</option>
-                            {trainers.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                            {trainers.map((t) => <option key={t.id} value={t.id}>{trainerLabel(t, trainers)}</option>)}
                         </select>
+                        {trainers.length === 0 && (
+                            <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.4rem' }}>
+                                No trainers yet — add a staff member under <b>Staff</b> to assign one.
+                                Sessions can be logged as Unassigned in the meantime.
+                            </p>
+                        )}
                     </div>
                     <div className="input-group" style={{ width: 130 }}>
                         <label className="input-label">Duration (min)</label>

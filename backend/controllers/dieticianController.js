@@ -1,21 +1,25 @@
 const { User, Client, DietChart, Notification } = require('../models');
 const { Op } = require('sequelize');
+const { isUnscoped, canAuthorPlan } = require('../config/permissions');
 
 // Diet-plan sections that only a dietician may author. On an admin edit these
 // keys are stripped from the incoming payload before merging, so admins can
 // maintain the health-assessment portions without touching the meal plan.
 const DIETICIAN_ONLY_KEYS = ['mealPlan', 'mealSpec', 'guidelines', 'nutritionGoals'];
 
-// "Admin-like" roles are unscoped (see the whole facility) and may edit the
-// health-assessment sections of a chart, but never the diet-plan sections.
-// Dietician management (assigning clients) remains admin/superadmin only, gated
-// at the route layer.
-const isAdminRole = (role) => role === 'admin' || role === 'superadmin' || role === 'staff';
+// Roles that see the whole facility rather than only their assigned members.
+// They may edit the health-assessment sections of a chart, but never the
+// diet-plan sections — those stay with the authoring dietician.
+//
+// This is deliberately *only* about scoping. It used to double as the check for
+// destructive authority, which is how a front-desk staff member ended up able
+// to delete any member's diet chart. Who may delete is now decided by the
+// CHART_DELETE capability at the route layer, which excludes staff.
 
 // Return the id list of clients a dietician is allowed to act on. Admins are
 // not scoped (returns null → "no restriction").
 const scopedClientIds = async (req) => {
-    if (isAdminRole(req.user.role)) return null;
+    if (isUnscoped(req.user.role)) return null;
     const clients = await Client.findAll({
         where: { facilityId: req.user.facilityId, dieticianId: req.user.id },
         attributes: ['id']
@@ -66,9 +70,14 @@ exports.assignClient = async (req, res) => {
         client.dieticianId = dieticianId;
         await client.save();
 
+        // Addressed to the dietician alone — this message is written in the
+        // second person, so a facility-wide audience would read wrong to
+        // everyone except its intended recipient.
         await Notification.create({
             message: `You have been assigned a new client: "${client.name}".`,
             type: 'info',
+            audience: 'user',
+            userId: dieticianId,
             facilityId,
             path: '/nutrition'
         });
@@ -100,7 +109,7 @@ exports.getClients = async (req, res) => {
     try {
         const facilityId = req.user.facilityId;
         const where = { facilityId };
-        if (!isAdminRole(req.user.role)) where.dieticianId = req.user.id;
+        if (!isUnscoped(req.user.role)) where.dieticianId = req.user.id;
 
         const clients = await Client.findAll({
             where,
@@ -122,7 +131,7 @@ exports.getClientHealthSource = async (req, res) => {
         const clientId = parseInt(req.params.clientId, 10);
         const client = await Client.findOne({ where: { id: clientId, facilityId } });
         if (!client) return res.status(404).json({ error: 'Client not found' });
-        if (!isAdminRole(req.user.role) && client.dieticianId !== req.user.id) {
+        if (!isUnscoped(req.user.role) && client.dieticianId !== req.user.id) {
             return res.status(403).json({ error: 'Forbidden' });
         }
 
@@ -156,12 +165,41 @@ exports.getClientHealthSource = async (req, res) => {
             .map((s) => ({ name: s.name, type: s.type, dosage: s.dosage }))
             .filter((s) => s.name);
 
+        // The member's active training week, as programmed by their trainer.
+        // Section 5 of the diet chart ("Exercise / Physical Activity") asks for
+        // exactly this, day by day — without it the dietician retypes a
+        // schedule the system already holds, and the copy drifts the moment the
+        // trainer changes the program.
+        const cs = hp.currentSchedule;
+        let workoutSchedule = null;
+        if (cs && Array.isArray(cs.days)) {
+            const offDays = (Array.isArray(cs.offDays) ? cs.offDays : ['sunday'])
+                .map((d) => String(d).toLowerCase());
+            const WEEK = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+            const training = [...cs.days].sort((a, b) => (a.dayNumber || 0) - (b.dayNumber || 0));
+            // Lay the programmed days onto the week, skipping the rest days.
+            let i = 0;
+            const days = WEEK.map((weekday) => {
+                const label = weekday.charAt(0).toUpperCase() + weekday.slice(1);
+                if (offDays.includes(weekday)) return { day: label, activity: 'Rest', exercises: 0 };
+                const d = training[i % training.length];
+                i += 1;
+                return {
+                    day: label,
+                    activity: d?.focus || '',
+                    exercises: Array.isArray(d?.exercises) ? d.exercises.length : 0
+                };
+            });
+            workoutSchedule = { name: cs.name || '', offDays, days };
+        }
+
         res.json({
             height, weight, bmi, waist,
             targetWeight: hp.targetWeight ?? null,
             goalType: hp.goalType ?? null,
             bodyFat, muscleMass, bodyCompWeight: latestBC.weight ?? null,
-            supplements
+            supplements,
+            workoutSchedule
         });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -230,14 +268,17 @@ exports.createChart = async (req, res) => {
 
         const client = await Client.findOne({ where: { id: clientId, facilityId } });
         if (!client) return res.status(404).json({ error: 'Client not found' });
-        if (client.dieticianId !== req.user.id) {
+        // A dietician may only author for their own assigned members. Admins are
+        // unscoped, and the chart is attributed to the member's assigned
+        // dietician (if any) rather than to the admin who opened it.
+        if (!isUnscoped(req.user.role) && client.dieticianId !== req.user.id) {
             return res.status(403).json({ error: 'This client is not assigned to you' });
         }
 
         const chart = await DietChart.create({
             facilityId,
             clientId,
-            dieticianId: req.user.id,
+            dieticianId: isUnscoped(req.user.role) ? (client.dieticianId || null) : req.user.id,
             title: title || null,
             assessmentDate: assessmentDate || null,
             primaryGoal: primaryGoal || null,
@@ -258,8 +299,10 @@ exports.updateChart = async (req, res) => {
         const chart = await DietChart.findOne({ where: { id: req.params.id, facilityId } });
         if (!chart) return res.status(404).json({ error: 'Diet chart not found' });
 
-        const admin = isAdminRole(req.user.role);
-        if (!admin) {
+        // Who may write the diet-plan sections, as opposed to merely the
+        // health-assessment ones.
+        const mayAuthorPlan = canAuthorPlan(req.user.role);
+        if (!isUnscoped(req.user.role)) {
             // Dietician must own the client this chart belongs to.
             const client = await Client.findOne({ where: { id: chart.clientId, facilityId } });
             if (!client || client.dieticianId !== req.user.id) {
@@ -275,8 +318,9 @@ exports.updateChart = async (req, res) => {
 
         if (data && typeof data === 'object') {
             const incoming = { ...data };
-            if (admin) {
-                // Admins may not author the diet-plan sections.
+            if (!mayAuthorPlan) {
+                // Staff maintain the assessment sections; the diet plan itself
+                // stays with the dietician (or the admin standing in for one).
                 DIETICIAN_ONLY_KEYS.forEach((k) => delete incoming[k]);
             }
             chart.data = { ...(chart.data || {}), ...incoming };
@@ -295,7 +339,7 @@ exports.deleteChart = async (req, res) => {
         const chart = await DietChart.findOne({ where: { id: req.params.id, facilityId } });
         if (!chart) return res.status(404).json({ error: 'Diet chart not found' });
 
-        if (!isAdminRole(req.user.role)) {
+        if (!isUnscoped(req.user.role)) {
             const client = await Client.findOne({ where: { id: chart.clientId, facilityId } });
             if (!client || client.dieticianId !== req.user.id) {
                 return res.status(403).json({ error: 'Forbidden' });

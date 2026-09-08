@@ -31,14 +31,19 @@ function definePTModels(sequelize, models = {}) {
         // via an explicit override. Kept for audit/reporting.
         overrideUsed: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
         // User (staff/admin) who created/logged the session.
-        createdBy: { type: DataTypes.INTEGER, allowNull: true }
+        createdBy: { type: DataTypes.INTEGER, allowNull: true },
+        // The attendance row this session raised, if any. Completing a session
+        // marks the member present for that day — without this link the two
+        // were separate ledgers that disagreed about whether a member came in.
+        attendanceId: { type: DataTypes.INTEGER, allowNull: true }
     }, {
         indexes: [
             { fields: ['facilityId'] },
             { fields: ['clientId'] },
             { fields: ['trainerId'] },
             { fields: ['status'] },
-            { fields: ['sessionDate'] }
+            { fields: ['sessionDate'] },
+            { fields: ['attendanceId'] }
         ]
     });
 

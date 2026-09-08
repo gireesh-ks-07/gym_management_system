@@ -2,9 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../../context/AuthContext';
 import { useToast } from '../../../context/ToastContext';
 import { ptApi } from '../../../api/pt';
-import api from '../../../api';
 import { Search, Plus, Pencil, Trash2, CheckCircle, XCircle } from 'lucide-react';
-import SessionModal from '../SessionModal';
+import SessionModal, { trainerLabel } from '../SessionModal';
 
 const STATUS_BADGE = { completed: 'badge-success', scheduled: 'badge-info', cancelled: 'badge-warning', no_show: 'badge-danger' };
 const STATUS_FILTERS = [
@@ -28,6 +27,10 @@ const PTSessionsPanel = () => {
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('');
     const [trainerFilter, setTrainerFilter] = useState('');
+    // The backend has always supported ?mine=true to scope a trainer to their
+    // own sessions; nothing ever sent it, so every trainer saw the whole
+    // facility's schedule.
+    const [onlyMine, setOnlyMine] = useState(false);
     const [modal, setModal] = useState({ open: false, session: null });
 
     const load = async () => {
@@ -35,20 +38,21 @@ const PTSessionsPanel = () => {
             setLoading(true);
             const params = { facilityId };
             if (statusFilter) params.status = statusFilter;
-            if (trainerFilter) params.trainerId = trainerFilter;
-            const [sess, mem, staffRes] = await Promise.all([
+            if (onlyMine) params.mine = 'true';
+            else if (trainerFilter) params.trainerId = trainerFilter;
+            const [sess, mem, trainerList] = await Promise.all([
                 ptApi.getSessions(params),
                 ptApi.getMembers(facilityId),
-                api.get('/staff').catch(() => ({ data: [] }))
+                ptApi.getTrainers(facilityId).catch(() => [])
             ]);
             setSessions(sess);
             setMembers(mem);
-            setTrainers(staffRes.data || []);
+            setTrainers(trainerList || []);
         } catch (e) { addToast('Failed to load sessions', 'error'); }
         finally { setLoading(false); }
     };
 
-    useEffect(() => { load(); }, [facilityId, statusFilter, trainerFilter]);
+    useEffect(() => { load(); }, [facilityId, statusFilter, trainerFilter, onlyMine]);
 
     const quickStatus = async (s, status) => {
         try {
@@ -77,10 +81,15 @@ const PTSessionsPanel = () => {
                         <input type="text" placeholder="Search member or trainer…" value={search} onChange={(e) => setSearch(e.target.value)}
                             style={{ border: 'none', background: 'transparent', outline: 'none', width: '100%', color: 'var(--text-main)' }} />
                     </div>
-                    <select className="input-field" style={{ width: 'auto', minWidth: 150 }} value={trainerFilter} onChange={(e) => setTrainerFilter(e.target.value)}>
+                    <select className="input-field" style={{ width: 'auto', minWidth: 150 }} value={trainerFilter}
+                        disabled={onlyMine} onChange={(e) => setTrainerFilter(e.target.value)}>
                         <option value="">All Trainers</option>
-                        {trainers.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                        {trainers.map((t) => <option key={t.id} value={t.id}>{trainerLabel(t, trainers)}</option>)}
                     </select>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.85rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', cursor: 'pointer' }}>
+                        <input type="checkbox" checked={onlyMine} onChange={(e) => setOnlyMine(e.target.checked)} />
+                        Only my sessions
+                    </label>
                     <button className="btn btn-primary" onClick={() => setModal({ open: true, session: null })}><Plus size={18} /> Log Session</button>
                 </div>
                 <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem', flexWrap: 'wrap' }}>

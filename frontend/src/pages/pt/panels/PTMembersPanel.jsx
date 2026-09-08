@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../../context/AuthContext';
 import { useToast } from '../../../context/ToastContext';
 import { ptApi } from '../../../api/pt';
-import api from '../../../api';
 import { Search, Dumbbell, Plus, History } from 'lucide-react';
 import Modal from '../../../components/Modal';
 import SessionModal from '../SessionModal';
@@ -27,12 +26,12 @@ const PTMembersPanel = () => {
     const load = async () => {
         try {
             setLoading(true);
-            const [mem, staffRes] = await Promise.all([
+            const [mem, trainerList] = await Promise.all([
                 ptApi.getMembers(facilityId),
-                api.get('/staff').catch(() => ({ data: [] }))
+                ptApi.getTrainers(facilityId).catch(() => [])
             ]);
             setMembers(mem);
-            setTrainers(staffRes.data || []);
+            setTrainers(trainerList || []);
         } catch (e) { addToast('Failed to load PT members', 'error'); }
         finally { setLoading(false); }
     };

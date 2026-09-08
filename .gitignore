@@ -10,3 +10,4 @@ backend/.env
 frontend/.env
 mobile_app/
 scratch/
+backend/config/config.json

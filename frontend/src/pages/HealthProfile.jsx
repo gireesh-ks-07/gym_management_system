@@ -26,7 +26,8 @@ import {
   TrendingUp,
   Scale,
   Apple,
-  Stethoscope
+  Stethoscope,
+  Lock
 } from 'lucide-react';
 import api from '../api';
 import { dieticianApi } from '../api/dietician';
@@ -77,6 +78,12 @@ const HealthProfile = () => {
   const { user, facilitySubscription: facility } = useAuth();
   const hasHealthPro = Boolean(facility?.modules?.healthPro);
   const isAdmin = user?.role === 'admin' || user?.role === 'superadmin';
+  // Dieticians open this page to read the member's training week and metrics so
+  // they can build a diet plan around it. Programming the workout stays with
+  // the trainer and admin, so every mutating control is hidden for them. The
+  // backend enforces the same split (HEALTH_READ vs HEALTH_WRITE /
+  // WORKOUTS_WRITE) — this is the UI half of it.
+  const readOnly = user?.role === 'dietician';
   const [loading, setLoading] = useState(true);
   const [showPlanEditor, setShowPlanEditor] = useState(false);
   const [showProfileEditor, setShowProfileEditor] = useState(false);
@@ -346,6 +353,7 @@ const HealthProfile = () => {
   };
 
   const saveProfile = async (data = profileDraft) => {
+    if (readOnly) return;
     if (data.currentWeight && (isNaN(data.currentWeight) || data.currentWeight < 0 || data.currentWeight > 500)) return addToast('Invalid current weight', 'error');
     if (data.targetWeight && (isNaN(data.targetWeight) || data.targetWeight < 0 || data.targetWeight > 500)) return addToast('Invalid target weight', 'error');
     if (data.height && (isNaN(data.height) || data.height < 0 || data.height > 300)) return addToast('Invalid height', 'error');
@@ -361,6 +369,7 @@ const HealthProfile = () => {
   };
 
   const createSchedule = async () => {
+    if (readOnly) return;
     if (!scheduleForm.name.trim()) return addToast('Schedule name is required', 'error');
     try {
       await api.post(`/clients/${id}/workout-schedules`, scheduleForm);
@@ -373,6 +382,7 @@ const HealthProfile = () => {
   };
 
   const markWorkout = async ({ status, dayNumber, note = '', cardioMinutes = '' }) => {
+    if (readOnly) return;
     const scheduleId = profile.currentSchedule?.id;
     if (!scheduleId) return addToast('No active schedule found', 'error');
     if (status === 'missed') {
@@ -383,6 +393,7 @@ const HealthProfile = () => {
   };
 
   const executeMarkWorkout = async ({ status, dayNumber, note, cardioMinutes, scheduleId }) => {
+    if (readOnly) return;
     try {
       await api.post(`/clients/${id}/workout-schedules/${scheduleId}/day-log`, {
         dayNumber,
@@ -403,6 +414,7 @@ const HealthProfile = () => {
   };
 
   const addDayLog = async () => {
+    if (readOnly) return;
     if (!dayLog.date) return addToast('Date is required', 'error');
     if (dayLog.status === 'cardio' && (!dayLog.cardioMinutes || isNaN(dayLog.cardioMinutes) || dayLog.cardioMinutes <= 0 || dayLog.cardioMinutes > 1440)) {
       return addToast('Valid cardio minutes are required (1-1440)', 'error');
@@ -420,6 +432,7 @@ const HealthProfile = () => {
   };
 
   const addWeeklyWeight = async () => {
+    if (readOnly) return;
     if (!weightForm.date) return addToast('Date is required', 'error');
     if (!weightForm.weight || isNaN(weightForm.weight) || weightForm.weight <= 0 || weightForm.weight > 500) {
       return addToast('Valid weight is required (1-500)', 'error');
@@ -458,6 +471,21 @@ const HealthProfile = () => {
 
   return (
     <div className="animate-fade-in" style={{ paddingBottom: '3rem' }}>
+      {readOnly && (
+        <div style={{
+          display: 'flex', alignItems: 'flex-start', gap: '0.6rem', marginBottom: '1.25rem',
+          padding: '0.85rem 1rem', borderRadius: '12px',
+          background: 'var(--bg-hover)', border: '1px solid var(--border-color)',
+          fontSize: '0.85rem', color: 'var(--text-secondary)'
+        }}>
+          <Lock size={15} style={{ marginTop: 2, flexShrink: 0, color: 'var(--primary)' }} />
+          <span>
+            Read-only view. You can see this member's metrics, workout schedule and history to
+            build their diet plan — the trainer and admin manage the programme itself.
+          </span>
+        </div>
+      )}
+
       {/* Header Profile Section */}
       <div className="glass-panel" style={{ marginBottom: '2rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '1.5rem 2rem' }}>
         <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'center' }}>
@@ -497,9 +525,11 @@ const HealthProfile = () => {
           <div className="glass-panel">
             <div className="section-header">
               <div className="section-title"><Activity size={18} /> Body Metrics</div>
-              <button className="btn btn-ghost" style={{ padding: '4px' }} onClick={openProfileModal}>
-                <PencilLine size={16} />
-              </button>
+              {!readOnly && (
+                <button className="btn btn-ghost" style={{ padding: '4px' }} onClick={openProfileModal}>
+                  <PencilLine size={16} />
+                </button>
+              )}
             </div>
 
             <div style={{ display: 'grid', gap: '1rem' }}>
@@ -538,6 +568,7 @@ const HealthProfile = () => {
           </div>
 
           {/* Quick Actions */}
+          {!readOnly && (
           <div className="glass-panel">
             <div className="section-title" style={{ marginBottom: '1rem' }}><Zap size={18} /> Quick Actions</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
@@ -561,10 +592,11 @@ const HealthProfile = () => {
               </button>
             </div>
           </div>
+          )}
 
           {/* Health Pro cards — left group (fills the space beside the calendar) */}
           {hasHealthPro && (
-            <HealthProFeatures profile={profile} clientId={id} fetchData={fetchData}
+            <HealthProFeatures profile={profile} clientId={id} fetchData={fetchData} readOnly={readOnly}
               sections={['measurements', 'prs', 'supplements']} />
           )}
         </div>
@@ -740,14 +772,16 @@ const HealthProfile = () => {
                               </div>
                             ))}
                           </div>
-                          <div style={{ marginTop: '16px', display: 'flex', gap: '8px' }}>
-                            <button className="btn btn-primary" style={{ flex: 1, padding: '8px', fontSize: '0.8rem' }} onClick={() => markWorkout({ status: 'done', dayNumber: day.dayNumber, note: 'Done' })}>
-                              Mark Done
-                            </button>
-                            <button className="btn btn-ghost" style={{ padding: '8px' }} onClick={() => markWorkout({ status: 'missed', dayNumber: day.dayNumber })}>
-                              Missed
-                            </button>
-                          </div>
+                          {!readOnly && (
+                            <div style={{ marginTop: '16px', display: 'flex', gap: '8px' }}>
+                              <button className="btn btn-primary" style={{ flex: 1, padding: '8px', fontSize: '0.8rem' }} onClick={() => markWorkout({ status: 'done', dayNumber: day.dayNumber, note: 'Done' })}>
+                                Mark Done
+                              </button>
+                              <button className="btn btn-ghost" style={{ padding: '8px' }} onClick={() => markWorkout({ status: 'missed', dayNumber: day.dayNumber })}>
+                                Missed
+                              </button>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
@@ -840,7 +874,7 @@ const HealthProfile = () => {
 
           {/* Health Pro cards — right group (fills the space beside the calendar) */}
           {hasHealthPro && (
-            <HealthProFeatures profile={profile} clientId={id} fetchData={fetchData}
+            <HealthProFeatures profile={profile} clientId={id} fetchData={fetchData} readOnly={readOnly}
               sections={['tests', 'mobility', 'reviews']} />
           )}
         </div>

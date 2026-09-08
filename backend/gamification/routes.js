@@ -8,6 +8,7 @@
 const { Op } = require('sequelize');
 const models = require('../models');
 const engine = require('./engine');
+const { P } = require('../config/permissions');
 
 const {
     sequelize,
@@ -29,7 +30,7 @@ const {
 } = models;
 
 function registerGamificationRoutes(app, deps) {
-    const { authenticate, authorize, checkSubscriptionStatus, sendServerError } = deps;
+    const { authenticate, authorize, checkSubscriptionStatus, requireModule, sendServerError } = deps;
 
     // Resolve the facility a request operates on. Admin/staff are locked to their
     // own facility; superadmin may target one via query/body.
@@ -44,7 +45,7 @@ function registerGamificationRoutes(app, deps) {
     // =====================================================================
     // CLIENT APP ROUTES  (role: client)
     // =====================================================================
-    const clientOnly = [authenticate, authorize(['client'])];
+    const clientOnly = [authenticate, authorize(P.CLIENT_APP), requireModule('gamification')];
     const cBase = '/api/client/gamification';
 
     // --- Hero card summary ---
@@ -332,7 +333,7 @@ function registerGamificationRoutes(app, deps) {
     app.get('/api/client/notifications', clientOnly, async (req, res) => {
         try {
             const notes = await Notification.findAll({
-                where: { clientId: req.user.id },
+                where: { audience: 'client', clientId: req.user.id },
                 order: [['createdAt', 'DESC']], limit: 50
             });
             res.json(notes);
@@ -341,7 +342,7 @@ function registerGamificationRoutes(app, deps) {
 
     app.post('/api/client/notifications/:id/read', clientOnly, async (req, res) => {
         try {
-            await Notification.update({ isRead: true }, { where: { id: req.params.id, clientId: req.user.id } });
+            await Notification.update({ isRead: true }, { where: { id: req.params.id, audience: 'client', clientId: req.user.id } });
             res.json({ message: 'ok' });
         } catch (err) { sendServerError(res, err, 'mark notification read'); }
     });
@@ -349,7 +350,7 @@ function registerGamificationRoutes(app, deps) {
     // =====================================================================
     // ADMIN PORTAL ROUTES  (role: admin / superadmin)
     // =====================================================================
-    const adminOnly = [authenticate, authorize(['admin', 'superadmin'])];
+    const adminOnly = [authenticate, requireModule('gamification'), authorize(P.GAMIFICATION_MANAGE)];
     const aBase = '/api/gamification';
 
     // --- Dashboard KPIs + chart data ---

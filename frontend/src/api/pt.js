@@ -1,6 +1,12 @@
 import api from '../api'; // existing axios instance (baseURL includes /api)
 
 export const ptApi = {
+    // The facility's trainer roster. Note this is NOT /staff — that endpoint
+    // lists staff *and* dieticians for the Staff page, and reusing it here is
+    // what put dieticians in the trainer dropdown.
+    getTrainers: (facilityId) =>
+        api.get('/pt/trainers', { params: { facilityId } }).then(res => res.data),
+
     // Members on a PT plan (with current-period usage)
     getMembers: (facilityId) =>
         api.get('/pt/members', { params: { facilityId } }).then(res => res.data),
