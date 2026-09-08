@@ -1889,7 +1889,7 @@ app.put('/api/memberships/:id/plan', authenticate, checkSubscriptionStatus, auth
 
 app.post('/api/staff', authenticate, checkSubscriptionStatus, authorize(P.STAFF_MANAGE), validate(S.createStaff), async (req, res) => {
     try {
-        const { name, email, password, role } = req.body;
+        const { name, email, password, role, phone, qualification, registrationNumber } = req.body;
         // Admins may create general staff or dieticians.
         const allowedStaffRoles = ['staff', 'dietician'];
         const newRole = allowedStaffRoles.includes(role) ? role : 'staff';
@@ -1916,7 +1916,13 @@ app.post('/api/staff', authenticate, checkSubscriptionStatus, authorize(P.STAFF_
             email,
             password,
             role: newRole,
-            facilityId: req.user.facilityId
+            phone: phone || null,
+            facilityId: req.user.facilityId,
+            // Mirrors the edit path: only a dietician carries professional
+            // credentials, and a blank stores null rather than an empty string.
+            ...(newRole === 'dietician'
+                ? { qualification: qualification || null, registrationNumber: registrationNumber || null }
+                : {})
         });
 
         // Add Notification for Facility Admin

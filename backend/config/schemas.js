@@ -105,7 +105,12 @@ const schemas = {
         email: email.required(),
         password: password.required(),
         role: Joi.string().valid('staff', 'dietician'),
-        phone: phone.allow('', null)
+        phone: phone.allow('', null),
+        // Dietician credentials, printed on the diet-chart PDF header. The edit
+        // path has always accepted these; leaving them off here rejected the
+        // Add Staff form outright with '"qualification" is not allowed'.
+        qualification: Joi.string().trim().max(120).allow('', null),
+        registrationNumber: Joi.string().trim().max(120).allow('', null)
     }).unknown(false),
 
     // --- Money ---
