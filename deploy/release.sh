@@ -56,7 +56,9 @@ say "Health check"
 # scheduled challenges before it listens. A flat sleep reports failure against a
 # perfectly healthy server, so poll instead.
 for attempt in $(seq 1 30); do
-    if curl -fsS "http://127.0.0.1:3000/api/health?db=1" 2>/dev/null; then
+    # --max-time matters: without it a stalled connection hangs the loop
+    # well past its 60s budget instead of failing the attempt.
+    if curl -fsS --max-time 5 "http://127.0.0.1:3000/api/health?db=1" 2>/dev/null; then
         echo
         pm2 status facility-api
         exit 0
