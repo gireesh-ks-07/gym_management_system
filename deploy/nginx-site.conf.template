@@ -1,0 +1,56 @@
+# Dashboard and API on one origin: nginx serves the Vite build and proxies
+# /api to Node on 127.0.0.1:3000. Same origin means the browser never issues a
+# cross-origin request, so the CORS allowlist in server.js is only exercised by
+# the Flutter apps (which send no Origin header and are always allowed).
+#
+# Rendered from this template by deploy/configure-domain.sh.
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name __DOMAIN__;
+
+    # certbot inserts its own 301 to https here on first issue.
+    root /var/www/facility;
+    index index.html;
+
+    # PDF exports (diet charts, invoices) and letterhead images.
+    client_max_body_size 25m;
+
+    access_log /var/log/nginx/facility.access.log;
+    error_log  /var/log/nginx/facility.error.log;
+
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+    gzip_min_length 1024;
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # PDF generation and the heavier report queries outrun the 60s default.
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+    }
+
+    # Vite emits content-hashed filenames, so these are safe to pin.
+    location /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+
+    # React Router owns every other path — always hand back index.html.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # index.html itself must never be cached, or a deploy strands clients on
+    # the previous build's asset hashes.
+    location = /index.html {
+        add_header Cache-Control "no-store";
+    }
+}
